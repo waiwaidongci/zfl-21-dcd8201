@@ -50,6 +50,20 @@ const initialData = {
       createdAt: new Date().toISOString()
     }
   ],
+  retestTasks: [
+    {
+      id: "retestTask_demo",
+      clockId: "clock_demo",
+      adjustmentId: "adjustment_demo",
+      plannedRetestAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+      priority: "medium",
+      status: "pending",
+      completedAt: null,
+      completedRetestId: null,
+      note: "调校后一周复测",
+      createdAt: new Date().toISOString()
+    }
+  ],
   suggestions: []
 };
 
@@ -74,6 +88,9 @@ const routes = [
   "GET /suggestions/:id",
   "GET /adjustments",
   "GET /retests",
+  "GET /retest-tasks",
+  "POST /clocks/:id/retest-tasks",
+  "GET /clocks/:id/retest-tasks",
   "GET /handovers"
 ];
 
@@ -550,7 +567,8 @@ async function handle(req, res) {
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id);
     const retests = db.retests.filter((item) => item.clockId === clock.id);
     const handovers = listHandovers(db, clock.id);
-    return send(res, 200, { data: { clock, adjustments, retests, handovers, latestRetest: latestRetest(db, clock.id) } });
+    const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id);
+    return send(res, 200, { data: { clock, adjustments, retests, handovers, retestTasks, latestRetest: latestRetest(db, clock.id) } });
   }
 
   const adjustmentMatch = pathname.match(/^\/clocks\/([^/]+)\/adjustments$/);
@@ -592,6 +610,19 @@ async function handle(req, res) {
       note: body.note || ""
     };
     db.retests.push(retest);
+    if (db.retestTasks) {
+      const pendingTasks = db.retestTasks.filter(
+        (t) => t.clockId === clock.id && t.status === "pending"
+      );
+      const matchingTask = adjustmentId
+        ? pendingTasks.find((t) => t.adjustmentId === adjustmentId)
+        : pendingTasks[0];
+      if (matchingTask) {
+        matchingTask.status = "completed";
+        matchingTask.completedAt = new Date().toISOString();
+        matchingTask.completedRetestId = retest.id;
+      }
+    }
     await writeDb(db);
     return send(res, 201, { data: retest, clock: clockSummary(db, clock) });
   }
@@ -639,6 +670,97 @@ async function handle(req, res) {
       const matchQualified = qualified === null || item.qualified === (qualified === "true");
       return matchClock && matchQualified;
     });
+    return send(res, 200, { data });
+  }
+
+  if (req.method === "GET" && pathname === "/retest-tasks") {
+    const status = url.searchParams.get("status");
+    const priority = url.searchParams.get("priority");
+    const overdue = url.searchParams.get("overdue");
+    const clockId = url.searchParams.get("clockId");
+    const now = new Date();
+    let data = (db.retestTasks || []).filter((item) => {
+      const matchStatus = !status || item.status === status;
+      const matchPriority = !priority || item.priority === priority;
+      const matchClock = !clockId || item.clockId === clockId;
+      let matchOverdue = true;
+      if (overdue === "true") {
+        matchOverdue = item.status === "pending" && new Date(item.plannedRetestAt) < now;
+      } else if (overdue === "false") {
+        matchOverdue = !(item.status === "pending" && new Date(item.plannedRetestAt) < now);
+      }
+      return matchStatus && matchPriority && matchClock && matchOverdue;
+    });
+    data = data.sort((a, b) => {
+      const priorityOrder = { high: 0, medium: 1, low: 2 };
+      const pa = priorityOrder[a.priority] ?? 1;
+      const pb = priorityOrder[b.priority] ?? 1;
+      if (pa !== pb) return pa - pb;
+      return new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt);
+    });
+    data = data.map((task) => ({
+      ...task,
+      clock: db.clocks.find((c) => c.id === task.clockId) || null,
+      adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
+      overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
+    }));
+    return send(res, 200, { data });
+  }
+
+  const retestTaskCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
+  if (retestTaskCreateMatch && req.method === "POST") {
+    const clock = findClock(db, retestTaskCreateMatch[1]);
+    const body = await parseBody(req);
+    required(body, ["plannedRetestAt", "priority"]);
+    const validPriorities = ["high", "medium", "low"];
+    if (!validPriorities.includes(body.priority)) {
+      const error = new Error(`priority 必须为 ${validPriorities.join("/")}`);
+      error.status = 400;
+      throw error;
+    }
+    const adjustmentId = body.adjustmentId || latestAdjustment(db, clock.id)?.id || null;
+    if (!adjustmentId) {
+      const error = new Error("该钟表无调校记录，无法创建复测任务");
+      error.status = 400;
+      throw error;
+    }
+    const task = {
+      id: makeId("retestTask"),
+      clockId: clock.id,
+      adjustmentId,
+      plannedRetestAt: body.plannedRetestAt,
+      priority: body.priority,
+      status: "pending",
+      completedAt: null,
+      completedRetestId: null,
+      note: body.note || "",
+      createdAt: new Date().toISOString()
+    };
+    if (!db.retestTasks) db.retestTasks = [];
+    db.retestTasks.push(task);
+    await writeDb(db);
+    return send(res, 201, {
+      data: {
+        ...task,
+        clock,
+        adjustment: db.adjustments.find((a) => a.id === adjustmentId) || null,
+        overdue: false
+      }
+    });
+  }
+
+  const retestTaskListMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
+  if (retestTaskListMatch && req.method === "GET") {
+    const clock = findClock(db, retestTaskListMatch[1]);
+    const now = new Date();
+    const data = (db.retestTasks || [])
+      .filter((item) => item.clockId === clock.id)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map((task) => ({
+        ...task,
+        adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
+        overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
+      }));
     return send(res, 200, { data });
   }
 

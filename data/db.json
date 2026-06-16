@@ -49,6 +49,16 @@
       "amplitude": 248,
       "qualified": false,
       "note": "仍偏快，振幅尚可"
+    },
+    {
+      "id": "retest_mqguyr0d_y1p5we",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "testedAt": "2026-06-16T16:30:19.453Z",
+      "dailyRateSeconds": 22,
+      "amplitude": 260,
+      "qualified": false,
+      "note": "复测完成"
     }
   ],
   "handovers": [
@@ -59,6 +69,32 @@
       "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
       "receiver": "王师傅",
       "createdAt": "2026-06-16T00:00:00.000Z"
+    }
+  ],
+  "retestTasks": [
+    {
+      "id": "retestTask_demo",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "plannedRetestAt": "2026-06-23T00:00:00.000Z",
+      "priority": "medium",
+      "status": "completed",
+      "completedAt": "2026-06-16T16:30:19.453Z",
+      "completedRetestId": "retest_mqguyr0d_y1p5we",
+      "note": "调校后一周复测",
+      "createdAt": "2026-06-17T00:00:00.000Z"
+    },
+    {
+      "id": "retestTask_mqguylxt_mji5ug",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "plannedRetestAt": "2026-06-25T00:00:00.000Z",
+      "priority": "high",
+      "status": "pending",
+      "completedAt": null,
+      "completedRetestId": null,
+      "note": "高优先级复测",
+      "createdAt": "2026-06-16T16:30:12.881Z"
     }
   ],
   "suggestions": [
