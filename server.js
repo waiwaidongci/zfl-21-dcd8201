@@ -61,6 +61,7 @@ const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
 
 function classifyImportItems(db, items) {
   const existingCodes = new Set(db.clocks.map((c) => c.code));
+  const seenInBatch = new Set();
   const importable = [];
   const duplicates = [];
   const missingFields = [];
@@ -74,10 +75,11 @@ function classifyImportItems(db, items) {
       missingFields.push({ index: i, item, missing });
       continue;
     }
-    if (existingCodes.has(item.code)) {
+    if (existingCodes.has(item.code) || seenInBatch.has(item.code)) {
       duplicates.push({ index: i, item, code: item.code });
       continue;
     }
+    seenInBatch.add(item.code);
     importable.push({ index: i, item });
   }
 

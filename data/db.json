@@ -10,22 +10,22 @@
       "createdAt": "2026-06-16T00:00:00.000Z"
     },
     {
-      "id": "clock_mqgsbyvj_tr66gb",
-      "code": "CLK-1900-01",
+      "id": "clock_mqgt2ij0_gikkhm",
+      "code": "CLK-BATCH-01",
       "escapementType": "英国销轮式",
       "balanceFrequency": "16000vph",
       "targetDailyRateSeconds": 30,
-      "note": "爱德华时期座钟",
-      "createdAt": "2026-06-16T15:16:37.327Z"
+      "note": "批次内第一条",
+      "createdAt": "2026-06-16T15:37:15.852Z"
     },
     {
-      "id": "clock_mqgsbyvj_cr3o4k",
-      "code": "CLK-1920-12",
+      "id": "clock_mqgt2ij0_camclq",
+      "code": "CLK-BATCH-02",
       "escapementType": "德国工字轮式",
       "balanceFrequency": "14400vph",
-      "targetDailyRateSeconds": 25,
-      "note": "",
-      "createdAt": "2026-06-16T15:16:37.327Z"
+      "targetDailyRateSeconds": 30,
+      "note": "正常可导入",
+      "createdAt": "2026-06-16T15:37:15.852Z"
     }
   ],
   "adjustments": [
