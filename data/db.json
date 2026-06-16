@@ -59,6 +59,16 @@
       "amplitude": 260,
       "qualified": false,
       "note": "复测完成"
+    },
+    {
+      "id": "retest_mqgve4a9_w86qqa",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "testedAt": "2026-06-16T16:42:16.497Z",
+      "dailyRateSeconds": 18,
+      "amplitude": 270,
+      "qualified": true,
+      "note": "精确指定任务复测"
     }
   ],
   "handovers": [
@@ -95,6 +105,18 @@
       "completedRetestId": null,
       "note": "高优先级复测",
       "createdAt": "2026-06-16T16:30:12.881Z"
+    },
+    {
+      "id": "retestTask_mqgvdqfg_izcdn4",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "plannedRetestAt": "2026-06-30T00:00:00.000Z",
+      "priority": "low",
+      "status": "completed",
+      "completedAt": "2026-06-16T16:42:16.497Z",
+      "completedRetestId": "retest_mqgve4a9_w86qqa",
+      "note": "二次复测任务",
+      "createdAt": "2026-06-16T16:41:58.540Z"
     }
   ],
   "suggestions": [

@@ -599,6 +599,19 @@ async function handle(req, res) {
     const qualified = body.qualified !== undefined
       ? Boolean(body.qualified)
       : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
+
+    let targetTask = null;
+    if (body.retestTaskId && db.retestTasks) {
+      targetTask = db.retestTasks.find(
+        (t) => t.id === body.retestTaskId && t.clockId === clock.id && t.status === "pending"
+      );
+      if (!targetTask) {
+        const error = new Error("指定的复测任务不存在或已完成");
+        error.status = 404;
+        throw error;
+      }
+    }
+
     const retest = {
       id: makeId("retest"),
       clockId: clock.id,
@@ -611,12 +624,24 @@ async function handle(req, res) {
     };
     db.retests.push(retest);
     if (db.retestTasks) {
-      const pendingTasks = db.retestTasks.filter(
-        (t) => t.clockId === clock.id && t.status === "pending"
-      );
-      const matchingTask = adjustmentId
-        ? pendingTasks.find((t) => t.adjustmentId === adjustmentId)
-        : pendingTasks[0];
+      let matchingTask = targetTask;
+      if (!matchingTask) {
+        const pendingTasks = db.retestTasks.filter(
+          (t) => t.clockId === clock.id && t.status === "pending"
+        );
+        if (adjustmentId) {
+          const sameAdjustmentTasks = pendingTasks.filter((t) => t.adjustmentId === adjustmentId);
+          if (sameAdjustmentTasks.length > 0) {
+            matchingTask = sameAdjustmentTasks.sort(
+              (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+            )[0];
+          }
+        } else if (pendingTasks.length > 0) {
+          matchingTask = pendingTasks.sort(
+            (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+          )[0];
+        }
+      }
       if (matchingTask) {
         matchingTask.status = "completed";
         matchingTask.completedAt = new Date().toISOString();
