@@ -595,10 +595,6 @@ async function handle(req, res) {
     const clock = findClock(db, retestMatch[1]);
     const body = await parseBody(req);
     required(body, ["dailyRateSeconds", "amplitude"]);
-    const adjustmentId = body.adjustmentId || latestAdjustment(db, clock.id)?.id || null;
-    const qualified = body.qualified !== undefined
-      ? Boolean(body.qualified)
-      : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
 
     let targetTask = null;
     if (body.retestTaskId && db.retestTasks) {
@@ -610,7 +606,17 @@ async function handle(req, res) {
         error.status = 404;
         throw error;
       }
+      if (body.adjustmentId && body.adjustmentId !== targetTask.adjustmentId) {
+        const error = new Error("复测任务与调校记录不匹配");
+        error.status = 400;
+        throw error;
+      }
     }
+
+    const adjustmentId = targetTask?.adjustmentId || body.adjustmentId || latestAdjustment(db, clock.id)?.id || null;
+    const qualified = body.qualified !== undefined
+      ? Boolean(body.qualified)
+      : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
 
     const retest = {
       id: makeId("retest"),
