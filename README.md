@@ -74,3 +74,53 @@ curl -X POST http://127.0.0.1:3021/clocks/import \
 ```bash
 curl http://127.0.0.1:3021/clocks
 ```
+
+## 师傅交接记录示例
+
+### 新增交接记录
+
+为指定钟表登记交接备注、下一步处理建议和接手人：
+
+```bash
+curl -X POST http://127.0.0.1:3021/clocks/clock_demo/handovers \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
+    "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
+    "receiver": "王师傅"
+  }'
+```
+
+必填字段：`handoverNote`（交接备注）、`receiver`（接手人）
+可选字段：`nextStepSuggestion`（下一步处理建议）
+
+### 按钟表查看交接历史
+
+查看某只钟表的所有交接记录，按时间倒序排列：
+
+```bash
+curl http://127.0.0.1:3021/clocks/clock_demo/handovers
+```
+
+### 查询所有交接记录（支持按钟表筛选）
+
+```bash
+# 查询所有交接记录
+curl http://127.0.0.1:3021/handovers
+
+# 按钟表筛选
+curl http://127.0.0.1:3021/handovers?clockId=clock_demo
+```
+
+### 钟表不存在时的错误提示
+
+```bash
+curl http://127.0.0.1:3021/clocks/nonexistent/handovers
+```
+
+返回：
+```json
+{
+  "error": "钟表不存在"
+}
+```

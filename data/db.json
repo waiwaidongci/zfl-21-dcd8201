@@ -50,5 +50,15 @@
       "qualified": false,
       "note": "仍偏快，振幅尚可"
     }
+  ],
+  "handovers": [
+    {
+      "id": "handover_demo",
+      "clockId": "clock_demo",
+      "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
+      "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
+      "receiver": "王师傅",
+      "createdAt": "2026-06-16T00:00:00.000Z"
+    }
   ]
 }

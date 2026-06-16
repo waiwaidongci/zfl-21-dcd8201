@@ -39,6 +39,16 @@ const initialData = {
       qualified: false,
       note: "仍偏快，振幅尚可"
     }
+  ],
+  handovers: [
+    {
+      id: "handover_demo",
+      clockId: "clock_demo",
+      handoverNote: "机芯已拆解清洗完毕，游丝有轻微变形需注意",
+      nextStepSuggestion: "建议先调校游丝外桩，再进行走时精度测试",
+      receiver: "王师傅",
+      createdAt: new Date().toISOString()
+    }
   ]
 };
 
@@ -54,8 +64,11 @@ const routes = [
   "POST /clocks/:id/adjustments",
   "POST /clocks/:id/retests",
   "GET /clocks/:id/latest-retest",
+  "GET /clocks/:id/handovers",
+  "POST /clocks/:id/handovers",
   "GET /adjustments",
-  "GET /retests"
+  "GET /retests",
+  "GET /handovers"
 ];
 
 const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
@@ -168,6 +181,12 @@ function latestAdjustment(db, clockId) {
   return db.adjustments
     .filter((item) => item.clockId === clockId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+}
+
+function listHandovers(db, clockId) {
+  return db.handovers
+    .filter((item) => item.clockId === clockId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 function clockSummary(db, clock) {
@@ -352,7 +371,8 @@ async function handle(req, res) {
     const clock = findClock(db, historyMatch[1]);
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id);
     const retests = db.retests.filter((item) => item.clockId === clock.id);
-    return send(res, 200, { data: { clock, adjustments, retests, latestRetest: latestRetest(db, clock.id) } });
+    const handovers = listHandovers(db, clock.id);
+    return send(res, 200, { data: { clock, adjustments, retests, handovers, latestRetest: latestRetest(db, clock.id) } });
   }
 
   const adjustmentMatch = pathname.match(/^\/clocks\/([^/]+)\/adjustments$/);
@@ -404,6 +424,30 @@ async function handle(req, res) {
     return send(res, 200, { data: latestRetest(db, latestMatch[1]) });
   }
 
+  const handoverListMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
+  if (handoverListMatch && req.method === "GET") {
+    const clock = findClock(db, handoverListMatch[1]);
+    return send(res, 200, { data: listHandovers(db, clock.id) });
+  }
+
+  const handoverCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
+  if (handoverCreateMatch && req.method === "POST") {
+    const clock = findClock(db, handoverCreateMatch[1]);
+    const body = await parseBody(req);
+    required(body, ["handoverNote", "receiver"]);
+    const handover = {
+      id: makeId("handover"),
+      clockId: clock.id,
+      handoverNote: body.handoverNote,
+      nextStepSuggestion: body.nextStepSuggestion || "",
+      receiver: body.receiver,
+      createdAt: new Date().toISOString()
+    };
+    db.handovers.push(handover);
+    await writeDb(db);
+    return send(res, 201, { data: handover });
+  }
+
   if (req.method === "GET" && pathname === "/adjustments") {
     const clockId = url.searchParams.get("clockId");
     return send(res, 200, { data: db.adjustments.filter((item) => !clockId || item.clockId === clockId) });
@@ -418,6 +462,11 @@ async function handle(req, res) {
       return matchClock && matchQualified;
     });
     return send(res, 200, { data });
+  }
+
+  if (req.method === "GET" && pathname === "/handovers") {
+    const clockId = url.searchParams.get("clockId");
+    return send(res, 200, { data: db.handovers.filter((item) => !clockId || item.clockId === clockId) });
   }
 
   return send(res, 404, { error: "接口不存在", routes });
