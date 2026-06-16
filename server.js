@@ -44,6 +44,7 @@ const initialData = {
 
 const routes = [
   "GET /health",
+  "GET /overview",
   "GET /clocks",
   "POST /clocks",
   "POST /clocks/import/preview",
@@ -180,6 +181,78 @@ function clockSummary(db, clock) {
   };
 }
 
+function classifyClockStatus(db, clock) {
+  const retest = latestRetest(db, clock.id);
+  const adjustment = latestAdjustment(db, clock.id);
+
+  if (!adjustment && !retest) {
+    return "neverRetested";
+  }
+
+  if (adjustment && !retest) {
+    return "neverRetested";
+  }
+
+  if (retest && adjustment && new Date(adjustment.createdAt) > new Date(retest.testedAt)) {
+    return "pendingRetest";
+  }
+
+  if (retest) {
+    return retest.qualified ? "qualified" : "retestFailed";
+  }
+
+  return "neverRetested";
+}
+
+function buildOverview(db) {
+  const statusBuckets = {
+    pendingRetest: [],
+    retestFailed: [],
+    qualified: [],
+    neverRetested: []
+  };
+
+  for (const clock of db.clocks) {
+    const status = classifyClockStatus(db, clock);
+    const summary = clockSummary(db, clock);
+    statusBuckets[status].push(summary);
+  }
+
+  const overview = {
+    totalClocks: db.clocks.length,
+    pendingRetest: statusBuckets.pendingRetest.length,
+    retestFailed: statusBuckets.retestFailed.length,
+    qualified: statusBuckets.qualified.length,
+    neverRetested: statusBuckets.neverRetested.length
+  };
+
+  let latestAdjustmentAt = null;
+  if (db.adjustments.length > 0) {
+    latestAdjustmentAt = db.adjustments
+      .map((a) => new Date(a.createdAt))
+      .sort((a, b) => b - a)[0]
+      .toISOString();
+  }
+
+  let latestRetestAt = null;
+  if (db.retests.length > 0) {
+    latestRetestAt = db.retests
+      .map((r) => new Date(r.testedAt))
+      .sort((a, b) => b - a)[0]
+      .toISOString();
+  }
+
+  return {
+    overview,
+    timestamps: {
+      latestAdjustmentAt,
+      latestRetestAt
+    },
+    breakdown: statusBuckets,
+    generatedAt: new Date().toISOString()
+  };
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -187,6 +260,10 @@ async function handle(req, res) {
 
   if (req.method === "GET" && pathname === "/health") {
     return send(res, 200, { ok: true, service: "clock-escapement-tuning-api", routes });
+  }
+
+  if (req.method === "GET" && pathname === "/overview") {
+    return send(res, 200, { data: buildOverview(db) });
   }
 
   if (req.method === "GET" && pathname === "/clocks") {
