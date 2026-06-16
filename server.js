@@ -76,6 +76,7 @@ const routes = [
   "POST /clocks/import",
   "GET /clocks/not-qualified",
   "GET /clocks/:id/history",
+  "GET /clocks/:id/health-score",
   "POST /clocks/:id/adjustments",
   "POST /clocks/:id/retests",
   "GET /clocks/:id/latest-retest",
@@ -84,6 +85,7 @@ const routes = [
   "POST /clocks/:id/suggestions/generate",
   "POST /clocks/:id/suggestions",
   "GET /clocks/:id/suggestions",
+  "GET /clocks/health-scores",
   "GET /suggestions",
   "GET /suggestions/:id",
   "GET /adjustments",
@@ -93,6 +95,51 @@ const routes = [
   "GET /clocks/:id/retest-tasks",
   "GET /handovers"
 ];
+
+const HEALTH_SCORE_RULES = {
+  recentRetestCount: 5,
+  minRetestCount: 2,
+  weights: {
+    dailyRateStability: 40,
+    amplitudeStability: 30,
+    consecutiveQualified: 30
+  },
+  dailyRate: {
+    excellentStdDev: 5,
+    goodStdDev: 10,
+    fairStdDev: 20,
+    excellentScore: 40,
+    goodScore: 30,
+    fairScore: 20,
+    poorScore: 0
+  },
+  amplitude: {
+    excellentStdDev: 15,
+    goodStdDev: 30,
+    fairStdDev: 50,
+    excellentScore: 30,
+    goodScore: 20,
+    fairScore: 10,
+    poorScore: 0,
+    lowAmplitudeThreshold: 200,
+    highAmplitudeThreshold: 320
+  },
+  consecutive: {
+    noneFailed: 30,
+    twoFailed: 15,
+    threeOrMoreFailed: 0
+  },
+  thresholds: {
+    stable: 80,
+    observe: 60
+  },
+  conclusions: {
+    stable: "稳定",
+    observe: "需观察",
+    rework: "需返工",
+    insufficient: "数据不足"
+  }
+};
 
 const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
 
@@ -384,6 +431,201 @@ function findSuggestion(db, suggestionId) {
   return suggestion;
 }
 
+function getRecentRetests(db, clockId) {
+  const count = HEALTH_SCORE_RULES.recentRetestCount;
+  return db.retests
+    .filter((item) => item.clockId === clockId)
+    .sort((a, b) => new Date(b.testedAt) - new Date(a.testedAt))
+    .slice(0, count)
+    .reverse();
+}
+
+function calculateStdDev(values) {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const squaredDiffs = values.map((v) => Math.pow(v - mean, 2));
+  const variance = squaredDiffs.reduce((sum, v) => sum + v, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function calculateDailyRateScore(retests) {
+  const dailyRates = retests.map((r) => r.dailyRateSeconds);
+  const stdDev = calculateStdDev(dailyRates);
+  const rules = HEALTH_SCORE_RULES.dailyRate;
+
+  if (stdDev <= rules.excellentStdDev) {
+    return { score: rules.excellentScore, stdDev, level: "excellent" };
+  } else if (stdDev <= rules.goodStdDev) {
+    return { score: rules.goodScore, stdDev, level: "good" };
+  } else if (stdDev <= rules.fairStdDev) {
+    return { score: rules.fairScore, stdDev, level: "fair" };
+  }
+  return { score: rules.poorScore, stdDev, level: "poor" };
+}
+
+function calculateAmplitudeScore(retests) {
+  const amplitudes = retests.map((r) => r.amplitude);
+  const stdDev = calculateStdDev(amplitudes);
+  const rules = HEALTH_SCORE_RULES.amplitude;
+
+  let baseScore;
+  let level;
+  if (stdDev <= rules.excellentStdDev) {
+    baseScore = rules.excellentScore;
+    level = "excellent";
+  } else if (stdDev <= rules.goodStdDev) {
+    baseScore = rules.goodScore;
+    level = "good";
+  } else if (stdDev <= rules.fairStdDev) {
+    baseScore = rules.fairScore;
+    level = "fair";
+  } else {
+    baseScore = rules.poorScore;
+    level = "poor";
+  }
+
+  const avgAmplitude = amplitudes.reduce((sum, v) => sum + v, 0) / amplitudes.length;
+  const abnormalCount = amplitudes.filter(
+    (a) => a < rules.lowAmplitudeThreshold || a > rules.highAmplitudeThreshold
+  ).length;
+
+  let abnormalPenalty = 0;
+  if (abnormalCount > 0) {
+    abnormalPenalty = Math.min(baseScore, abnormalCount * 5);
+  }
+
+  return {
+    score: Math.max(0, baseScore - abnormalPenalty),
+    stdDev,
+    avgAmplitude,
+    abnormalCount,
+    level
+  };
+}
+
+function calculateConsecutiveScore(retests) {
+  const rules = HEALTH_SCORE_RULES.consecutive;
+  let consecutiveFailed = 0;
+  let maxConsecutiveFailed = 0;
+
+  for (let i = retests.length - 1; i >= 0; i--) {
+    if (!retests[i].qualified) {
+      consecutiveFailed++;
+      maxConsecutiveFailed = Math.max(maxConsecutiveFailed, consecutiveFailed);
+    } else {
+      consecutiveFailed = 0;
+    }
+  }
+
+  if (maxConsecutiveFailed === 0) {
+    return { score: rules.noneFailed, maxConsecutiveFailed, level: "excellent" };
+  } else if (maxConsecutiveFailed === 1) {
+    return { score: rules.twoFailed, maxConsecutiveFailed, level: "good" };
+  } else if (maxConsecutiveFailed === 2) {
+    return { score: rules.twoFailed, maxConsecutiveFailed, level: "fair" };
+  }
+  return { score: rules.threeOrMoreFailed, maxConsecutiveFailed, level: "poor" };
+}
+
+function calculateHealthScore(db, clock) {
+  const recentRetests = getRecentRetests(db, clock.id);
+  const rules = HEALTH_SCORE_RULES;
+
+  if (recentRetests.length < rules.minRetestCount) {
+    return {
+      clockId: clock.id,
+      clockCode: clock.code,
+      totalScore: null,
+      conclusion: rules.conclusions.insufficient,
+      details: {
+        retestCount: recentRetests.length,
+        minRequired: rules.minRetestCount
+      },
+      recentRetests: recentRetests.map((r) => ({
+        id: r.id,
+        testedAt: r.testedAt,
+        dailyRateSeconds: r.dailyRateSeconds,
+        amplitude: r.amplitude,
+        qualified: r.qualified
+      })),
+      calculatedAt: new Date().toISOString(),
+      rulesVersion: "1.0"
+    };
+  }
+
+  const dailyRateResult = calculateDailyRateScore(recentRetests);
+  const amplitudeResult = calculateAmplitudeScore(recentRetests);
+  const consecutiveResult = calculateConsecutiveScore(recentRetests);
+
+  const totalScore = dailyRateResult.score + amplitudeResult.score + consecutiveResult.score;
+
+  let conclusion;
+  if (totalScore >= rules.thresholds.stable) {
+    conclusion = rules.conclusions.stable;
+  } else if (totalScore >= rules.thresholds.observe) {
+    conclusion = rules.conclusions.observe;
+  } else {
+    conclusion = rules.conclusions.rework;
+  }
+
+  const suggestions = [];
+  if (dailyRateResult.level === "poor" || dailyRateResult.level === "fair") {
+    suggestions.push("日差波动较大，建议检查游丝状态和摆轮平衡");
+  }
+  if (amplitudeResult.level === "poor" || amplitudeResult.level === "fair") {
+    suggestions.push("振幅不稳定，建议检查发条力矩和传动系统润滑");
+  }
+  if (amplitudeResult.abnormalCount > 0) {
+    suggestions.push(`检测到 ${amplitudeResult.abnormalCount} 次振幅异常，需重点关注`);
+  }
+  if (consecutiveResult.maxConsecutiveFailed >= 2) {
+    suggestions.push(`连续 ${consecutiveResult.maxConsecutiveFailed} 次不合格，建议重新调校或返工时序检查`);
+  }
+  if (suggestions.length === 0) {
+    suggestions.push("各项指标正常，继续保持当前维护节奏");
+  }
+
+  return {
+    clockId: clock.id,
+    clockCode: clock.code,
+    totalScore,
+    conclusion,
+    details: {
+      retestCount: recentRetests.length,
+      dailyRateStability: {
+        weight: rules.weights.dailyRateStability,
+        score: dailyRateResult.score,
+        stdDev: Number(dailyRateResult.stdDev.toFixed(2)),
+        level: dailyRateResult.level
+      },
+      amplitudeStability: {
+        weight: rules.weights.amplitudeStability,
+        score: amplitudeResult.score,
+        stdDev: Number(amplitudeResult.stdDev.toFixed(2)),
+        avgAmplitude: Number(amplitudeResult.avgAmplitude.toFixed(1)),
+        abnormalCount: amplitudeResult.abnormalCount,
+        level: amplitudeResult.level
+      },
+      consecutiveQualified: {
+        weight: rules.weights.consecutiveQualified,
+        score: consecutiveResult.score,
+        maxConsecutiveFailed: consecutiveResult.maxConsecutiveFailed,
+        level: consecutiveResult.level
+      }
+    },
+    suggestions,
+    recentRetests: recentRetests.map((r) => ({
+      id: r.id,
+      testedAt: r.testedAt,
+      dailyRateSeconds: r.dailyRateSeconds,
+      amplitude: r.amplitude,
+      qualified: r.qualified
+    })),
+    calculatedAt: new Date().toISOString(),
+    rulesVersion: "1.0"
+  };
+}
+
 function clockSummary(db, clock) {
   const retest = latestRetest(db, clock.id);
   const adjustment = latestAdjustment(db, clock.id);
@@ -561,6 +803,28 @@ async function handle(req, res) {
     return send(res, 200, { data });
   }
 
+  if (req.method === "GET" && pathname === "/clocks/health-scores") {
+    const conclusion = url.searchParams.get("conclusion");
+    const data = db.clocks.map((clock) => calculateHealthScore(db, clock));
+    let filtered = data;
+    if (conclusion) {
+      filtered = data.filter((item) => item.conclusion === conclusion);
+    }
+    const summary = {
+      total: db.clocks.length,
+      stable: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.stable).length,
+      observe: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.observe).length,
+      rework: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.rework).length,
+      insufficient: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.insufficient).length
+    };
+    return send(res, 200, {
+      summary,
+      data: filtered,
+      rules: HEALTH_SCORE_RULES,
+      generatedAt: new Date().toISOString()
+    });
+  }
+
   const historyMatch = pathname.match(/^\/clocks\/([^/]+)\/history$/);
   if (historyMatch && req.method === "GET") {
     const clock = findClock(db, historyMatch[1]);
@@ -569,6 +833,12 @@ async function handle(req, res) {
     const handovers = listHandovers(db, clock.id);
     const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id);
     return send(res, 200, { data: { clock, adjustments, retests, handovers, retestTasks, latestRetest: latestRetest(db, clock.id) } });
+  }
+
+  const healthScoreMatch = pathname.match(/^\/clocks\/([^/]+)\/health-score$/);
+  if (healthScoreMatch && req.method === "GET") {
+    const clock = findClock(db, healthScoreMatch[1]);
+    return send(res, 200, { data: calculateHealthScore(db, clock) });
   }
 
   const adjustmentMatch = pathname.match(/^\/clocks\/([^/]+)\/adjustments$/);
