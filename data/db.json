@@ -60,5 +60,25 @@
       "receiver": "王师傅",
       "createdAt": "2026-06-16T00:00:00.000Z"
     }
+  ],
+  "suggestions": [
+    {
+      "id": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "targetDailyRateSeconds": 20,
+      "currentDailyRateSeconds": 31,
+      "deviationSeconds": 11,
+      "deviationDescription": "偏快 11.0 秒/天",
+      "suggestedDirection": "慢针方向",
+      "conservativeAmount": "游丝快慢针向慢侧微调0.1格",
+      "conservativeAmountValue": 0.1,
+      "riskWarnings": [
+        "上次调校后日差变化方向与预期一致，可继续沿此方向微调"
+      ],
+      "referenceRetestId": "retest_demo",
+      "referenceAdjustmentId": "adjustment_demo",
+      "note": "初次生成建议，保存备案",
+      "createdAt": "2026-06-16T16:19:35.505Z"
+    }
   ]
 }

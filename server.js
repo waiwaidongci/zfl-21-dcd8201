@@ -49,7 +49,8 @@ const initialData = {
       receiver: "王师傅",
       createdAt: new Date().toISOString()
     }
-  ]
+  ],
+  suggestions: []
 };
 
 const routes = [
@@ -66,6 +67,11 @@ const routes = [
   "GET /clocks/:id/latest-retest",
   "GET /clocks/:id/handovers",
   "POST /clocks/:id/handovers",
+  "POST /clocks/:id/suggestions/generate",
+  "POST /clocks/:id/suggestions",
+  "GET /clocks/:id/suggestions",
+  "GET /suggestions",
+  "GET /suggestions/:id",
   "GET /adjustments",
   "GET /retests",
   "GET /handovers"
@@ -187,6 +193,178 @@ function listHandovers(db, clockId) {
   return db.handovers
     .filter((item) => item.clockId === clockId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function parseAdjustmentAmount(amount) {
+  if (!amount) return null;
+  const match = amount.match(/([\d.]+)\s*格/);
+  if (match) return Number(match[1]);
+  return null;
+}
+
+function calculateConservativeAmount(db, deviationSeconds, lastAdjustment) {
+  const absDeviation = Math.abs(deviationSeconds);
+  const lastAmount = lastAdjustment ? parseAdjustmentAmount(lastAdjustment.amount) : null;
+
+  let conservativeFactor;
+  if (absDeviation > 60) {
+    conservativeFactor = 0.4;
+  } else if (absDeviation > 30) {
+    conservativeFactor = 0.5;
+  } else if (absDeviation > 15) {
+    conservativeFactor = 0.6;
+  } else {
+    conservativeFactor = 0.7;
+  }
+
+  let recommendedAmount;
+  if (lastAmount && lastAdjustment.currentDailyRateSeconds !== undefined) {
+    const lastRateBefore = lastAdjustment.currentDailyRateSeconds;
+    const retestAfter = db.retests.find((r) => r.adjustmentId === lastAdjustment.id);
+    if (retestAfter) {
+      const actualChange = Math.abs(lastRateBefore - retestAfter.dailyRateSeconds);
+      if (actualChange > 0 && lastAmount > 0) {
+        const changePerUnit = actualChange / lastAmount;
+        const targetChange = absDeviation * conservativeFactor;
+        recommendedAmount = targetChange / changePerUnit;
+      }
+    }
+  }
+
+  if (!recommendedAmount) {
+    if (absDeviation > 60) {
+      recommendedAmount = 0.8;
+    } else if (absDeviation > 30) {
+      recommendedAmount = 0.5;
+    } else if (absDeviation > 15) {
+      recommendedAmount = 0.3;
+    } else {
+      recommendedAmount = 0.2;
+    }
+  }
+
+  return Math.round(recommendedAmount * 10) / 10;
+}
+
+function generateRiskWarning(db, deviationSeconds, lastAdjustment, retest, clock) {
+  const warnings = [];
+  const absDeviation = Math.abs(deviationSeconds);
+
+  if (absDeviation > 60) {
+    warnings.push("当前偏差较大，建议分多次微调，避免单次调校过量导致反向偏差");
+  }
+
+  if (retest && retest.amplitude !== undefined) {
+    if (retest.amplitude < 200) {
+      warnings.push("振幅偏低，调校前请检查发条状态和传动系统润滑情况");
+    } else if (retest.amplitude > 320) {
+      warnings.push("振幅偏高，注意游丝是否正常，避免摆幅过大影响走时稳定性");
+    }
+  }
+
+  if (lastAdjustment) {
+    const retestAfter = db.retests.find((r) => r.adjustmentId === lastAdjustment.id);
+    if (retestAfter) {
+      const actualChange = retestAfter.dailyRateSeconds - lastAdjustment.currentDailyRateSeconds;
+      const expectedDirection = lastAdjustment.direction === "慢针方向" ? -1 : 1;
+      if (actualChange * expectedDirection > 0) {
+        warnings.push("上次调校后日差变化方向与预期一致，可继续沿此方向微调");
+      } else if (actualChange * expectedDirection < 0) {
+        warnings.push("注意：上次调校后日差变化方向与预期相反，可能存在其他影响因素，建议仔细检查机芯");
+      }
+    }
+  }
+
+  const consecutiveSameDirection = db.suggestions
+    .filter((s) => s.clockId === clock.id && s.suggestedDirection)
+    .slice(-3)
+    .filter((s) => {
+      const direction = deviationSeconds > 0 ? "慢针方向" : "快针方向";
+      return s.suggestedDirection === direction;
+    }).length;
+
+  if (consecutiveSameDirection >= 3) {
+    warnings.push("已连续多次建议同方向调校，请注意是否存在其他故障因素");
+  }
+
+  if (warnings.length === 0) {
+    warnings.push("当前状态正常，按保守幅度调校后建议复测验证");
+  }
+
+  return warnings;
+}
+
+function generateAdjustmentSuggestion(db, clock) {
+  const retest = latestRetest(db, clock.id);
+  const lastAdjustment = latestAdjustment(db, clock.id);
+
+  if (!retest) {
+    const error = new Error("暂无复测记录，无法生成调校建议");
+    error.status = 400;
+    throw error;
+  }
+
+  const targetRate = clock.targetDailyRateSeconds;
+  const currentRate = retest.dailyRateSeconds;
+  const deviationSeconds = currentRate - targetRate;
+  const absDeviation = Math.abs(deviationSeconds);
+
+  let suggestedDirection;
+  if (deviationSeconds > 0) {
+    suggestedDirection = "慢针方向";
+  } else if (deviationSeconds < 0) {
+    suggestedDirection = "快针方向";
+  } else {
+    suggestedDirection = "无需调校";
+  }
+
+  const conservativeAmountValue = absDeviation > 0
+    ? calculateConservativeAmount(db, deviationSeconds, lastAdjustment)
+    : 0;
+
+  const conservativeAmount = absDeviation > 0
+    ? `游丝快慢针向${suggestedDirection === "慢针方向" ? "慢侧" : "快侧"}微调${conservativeAmountValue}格`
+    : "无需调校";
+
+  const riskWarnings = generateRiskWarning(db, deviationSeconds, lastAdjustment, retest, clock);
+
+  const deviationDesc = deviationSeconds > 0
+    ? `偏快 ${deviationSeconds.toFixed(1)} 秒/天`
+    : deviationSeconds < 0
+    ? `偏慢 ${Math.abs(deviationSeconds).toFixed(1)} 秒/天`
+    : "日差在目标范围内";
+
+  return {
+    clockId: clock.id,
+    clockCode: clock.code,
+    targetDailyRateSeconds: targetRate,
+    currentDailyRateSeconds: currentRate,
+    deviationSeconds: Number(deviationSeconds.toFixed(2)),
+    deviationDescription: deviationDesc,
+    suggestedDirection,
+    conservativeAmount,
+    conservativeAmountValue,
+    riskWarnings,
+    referenceRetestId: retest.id,
+    referenceAdjustmentId: lastAdjustment ? lastAdjustment.id : null,
+    generatedAt: new Date().toISOString()
+  };
+}
+
+function listSuggestions(db, clockId) {
+  return db.suggestions
+    .filter((item) => !clockId || item.clockId === clockId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function findSuggestion(db, suggestionId) {
+  const suggestion = db.suggestions.find((item) => item.id === suggestionId);
+  if (!suggestion) {
+    const error = new Error("建议记录不存在");
+    error.status = 404;
+    throw error;
+  }
+  return suggestion;
 }
 
 function clockSummary(db, clock) {
@@ -467,6 +645,76 @@ async function handle(req, res) {
   if (req.method === "GET" && pathname === "/handovers") {
     const clockId = url.searchParams.get("clockId");
     return send(res, 200, { data: db.handovers.filter((item) => !clockId || item.clockId === clockId) });
+  }
+
+  const generateSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions\/generate$/);
+  if (generateSuggestionMatch && req.method === "POST") {
+    const clock = findClock(db, generateSuggestionMatch[1]);
+    const suggestion = generateAdjustmentSuggestion(db, clock);
+    return send(res, 200, { data: suggestion });
+  }
+
+  const saveSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
+  if (saveSuggestionMatch && req.method === "POST") {
+    const clock = findClock(db, saveSuggestionMatch[1]);
+    const body = await parseBody(req);
+    const suggestion = generateAdjustmentSuggestion(db, clock);
+    const savedSuggestion = {
+      id: makeId("suggestion"),
+      clockId: clock.id,
+      targetDailyRateSeconds: suggestion.targetDailyRateSeconds,
+      currentDailyRateSeconds: suggestion.currentDailyRateSeconds,
+      deviationSeconds: suggestion.deviationSeconds,
+      deviationDescription: suggestion.deviationDescription,
+      suggestedDirection: suggestion.suggestedDirection,
+      conservativeAmount: suggestion.conservativeAmount,
+      conservativeAmountValue: suggestion.conservativeAmountValue,
+      riskWarnings: suggestion.riskWarnings,
+      referenceRetestId: suggestion.referenceRetestId,
+      referenceAdjustmentId: suggestion.referenceAdjustmentId,
+      note: body.note || "",
+      createdAt: new Date().toISOString()
+    };
+    db.suggestions.push(savedSuggestion);
+    await writeDb(db);
+    return send(res, 201, { data: savedSuggestion });
+  }
+
+  const listSuggestionsMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
+  if (listSuggestionsMatch && req.method === "GET") {
+    const clock = findClock(db, listSuggestionsMatch[1]);
+    const data = listSuggestions(db, clock.id).map((s) => ({
+      ...s,
+      referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
+      referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
+    }));
+    return send(res, 200, { data });
+  }
+
+  if (req.method === "GET" && pathname === "/suggestions") {
+    const clockId = url.searchParams.get("clockId");
+    const data = listSuggestions(db, clockId).map((s) => ({
+      ...s,
+      referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
+      referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
+    }));
+    return send(res, 200, { data });
+  }
+
+  const suggestionDetailMatch = pathname.match(/^\/suggestions\/([^/]+)$/);
+  if (suggestionDetailMatch && req.method === "GET") {
+    const suggestion = findSuggestion(db, suggestionDetailMatch[1]);
+    const clock = db.clocks.find((c) => c.id === suggestion.clockId) || null;
+    const referenceRetest = db.retests.find((r) => r.id === suggestion.referenceRetestId) || null;
+    const referenceAdjustment = db.adjustments.find((a) => a.id === suggestion.referenceAdjustmentId) || null;
+    return send(res, 200, {
+      data: {
+        ...suggestion,
+        clock,
+        referenceRetest,
+        referenceAdjustment
+      }
+    });
   }
 
   return send(res, 404, { error: "接口不存在", routes });
