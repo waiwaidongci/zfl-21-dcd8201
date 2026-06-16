@@ -46,6 +46,8 @@ const routes = [
   "GET /health",
   "GET /clocks",
   "POST /clocks",
+  "POST /clocks/import/preview",
+  "POST /clocks/import",
   "GET /clocks/not-qualified",
   "GET /clocks/:id/history",
   "POST /clocks/:id/adjustments",
@@ -54,6 +56,45 @@ const routes = [
   "GET /adjustments",
   "GET /retests"
 ];
+
+const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
+
+function classifyImportItems(db, items) {
+  const existingCodes = new Set(db.clocks.map((c) => c.code));
+  const importable = [];
+  const duplicates = [];
+  const missingFields = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const missing = CLOCK_REQUIRED_FIELDS.filter(
+      (f) => item[f] === undefined || item[f] === ""
+    );
+    if (missing.length > 0) {
+      missingFields.push({ index: i, item, missing });
+      continue;
+    }
+    if (existingCodes.has(item.code)) {
+      duplicates.push({ index: i, item, code: item.code });
+      continue;
+    }
+    importable.push({ index: i, item });
+  }
+
+  return { importable, duplicates, missingFields };
+}
+
+function buildClockFromItem(item) {
+  return {
+    id: makeId("clock"),
+    code: item.code,
+    escapementType: item.escapementType,
+    balanceFrequency: item.balanceFrequency,
+    targetDailyRateSeconds: Number(item.targetDailyRateSeconds ?? 30),
+    note: item.note || "",
+    createdAt: new Date().toISOString()
+  };
+}
 
 async function ensureDb() {
   await mkdir(path.dirname(DB_FILE), { recursive: true });
@@ -171,6 +212,55 @@ async function handle(req, res) {
     db.clocks.push(clock);
     await writeDb(db);
     return send(res, 201, { data: clockSummary(db, clock) });
+  }
+
+  if (req.method === "POST" && pathname === "/clocks/import/preview") {
+    const body = await parseBody(req);
+    if (!Array.isArray(body.clocks)) {
+      const error = new Error("请求体必须包含 clocks 数组");
+      error.status = 400;
+      throw error;
+    }
+    const { importable, duplicates, missingFields } = classifyImportItems(db, body.clocks);
+    return send(res, 200, {
+      summary: {
+        total: body.clocks.length,
+        importable: importable.length,
+        duplicates: duplicates.length,
+        missingFields: missingFields.length
+      },
+      importable: importable.map(({ index, item }) => ({ index, item })),
+      duplicates: duplicates.map(({ index, item, code }) => ({ index, code, item })),
+      missingFields: missingFields.map(({ index, item, missing }) => ({ index, missing, item }))
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/clocks/import") {
+    const body = await parseBody(req);
+    if (!Array.isArray(body.clocks)) {
+      const error = new Error("请求体必须包含 clocks 数组");
+      error.status = 400;
+      throw error;
+    }
+    const { importable, duplicates, missingFields } = classifyImportItems(db, body.clocks);
+    const created = [];
+    for (const { item } of importable) {
+      const clock = buildClockFromItem(item);
+      db.clocks.push(clock);
+      created.push(clock);
+    }
+    await writeDb(db);
+    return send(res, 201, {
+      summary: {
+        total: body.clocks.length,
+        created: created.length,
+        duplicates: duplicates.length,
+        missingFields: missingFields.length
+      },
+      created: created.map((clock) => clockSummary(db, clock)),
+      duplicates: duplicates.map(({ index, code, item }) => ({ index, code, item })),
+      missingFields: missingFields.map(({ index, item, missing }) => ({ index, missing, item }))
+    });
   }
 
   if (req.method === "GET" && pathname === "/clocks/not-qualified") {
