@@ -2886,7 +2886,8 @@ async function handle(req, res) {
         total: logs.length,
         stats,
         operationTypeLabels,
-        keyFields: {
+        keyFields: CLOCK_KEY_FIELDS,
+        keyFieldsByResource: {
           clock: CLOCK_KEY_FIELDS,
           retestTask: RETEST_TASK_KEY_FIELDS,
           workflow: WORKFLOW_KEY_FIELDS
