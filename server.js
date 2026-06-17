@@ -133,6 +133,7 @@ const initialData = {
   ],
   suggestions: [],
   healthScoreRules: [],
+  workflowEvents: [],
   auditLogs: [
     {
       id: "audit_demo",
@@ -228,7 +229,7 @@ const WORKFLOW_TRANSITIONS = {
   [WORKFLOW_STATUSES.PENDING_RETEST]: [WORKFLOW_STATUSES.RETEST_FAILED, WORKFLOW_STATUSES.QUALIFIED],
   [WORKFLOW_STATUSES.RETEST_FAILED]: [WORKFLOW_STATUSES.PENDING_RETEST],
   [WORKFLOW_STATUSES.QUALIFIED]: [WORKFLOW_STATUSES.ARCHIVED, WORKFLOW_STATUSES.PENDING_RETEST],
-  [WORKFLOW_STATUSES.ARCHIVED]: []
+  [WORKFLOW_STATUSES.ARCHIVED]: [WORKFLOW_STATUSES.PENDING_RETEST]
 };
 
 const WORKFLOW_OPERATIONS = {
@@ -236,10 +237,87 @@ const WORKFLOW_OPERATIONS = {
   SUBMIT_RETEST: "submit_retest",
   COMPLETE_RETEST: "complete_retest",
   REWORK: "rework",
-  ARCHIVE: "archive"
+  ARCHIVE: "archive",
+  UNARCHIVE_RECHECK: "unarchive_recheck"
 };
 
+const WORKFLOW_EVENT_TYPES = {
+  INITIAL_ADJUSTED: "initial_adjusted",
+  SUBMITTED_RETEST: "submitted_retest",
+  COMPLETED_RETEST_PASSED: "completed_retest_passed",
+  COMPLETED_RETEST_FAILED: "completed_retest_failed",
+  REWORKED: "reworked",
+  ARCHIVED: "archived",
+  UNARCHIVED_FOR_RECHECK: "unarchived_for_recheck"
+};
+
+const WORKFLOW_EVENT_TYPE_LABELS = {
+  [WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED]: "初调完成",
+  [WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST]: "提交复测",
+  [WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED]: "复测合格",
+  [WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED]: "复测不合格",
+  [WORKFLOW_EVENT_TYPES.REWORKED]: "返工调校",
+  [WORKFLOW_EVENT_TYPES.ARCHIVED]: "归档",
+  [WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK]: "归档后复检"
+};
+
+const WORKFLOW_EVENT_TO_STATUS = {
+  [WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED]: WORKFLOW_STATUSES.INITIAL_ADJUSTED,
+  [WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST]: WORKFLOW_STATUSES.PENDING_RETEST,
+  [WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED]: WORKFLOW_STATUSES.QUALIFIED,
+  [WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED]: WORKFLOW_STATUSES.RETEST_FAILED,
+  [WORKFLOW_EVENT_TYPES.REWORKED]: WORKFLOW_STATUSES.PENDING_RETEST,
+  [WORKFLOW_EVENT_TYPES.ARCHIVED]: WORKFLOW_STATUSES.ARCHIVED,
+  [WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK]: WORKFLOW_STATUSES.PENDING_RETEST
+};
+
+function safeParseDate(value) {
+  try {
+    if (!value) return null;
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  } catch {
+    return null;
+  }
+}
+
+function getClockWorkflowEvents(db, clockId) {
+  if (!db.workflowEvents || !Array.isArray(db.workflowEvents)) return [];
+  try {
+    return db.workflowEvents
+      .filter((e) => e && e.clockId === clockId)
+      .sort((a, b) => {
+        const ta = safeParseDate(a.occurredAt) || new Date(0);
+        const tb = safeParseDate(b.occurredAt) || new Date(0);
+        return ta - tb;
+      });
+  } catch {
+    return [];
+  }
+}
+
 function deriveWorkflowStatus(db, clockId) {
+  try {
+    const events = getClockWorkflowEvents(db, clockId);
+    let currentStatus = WORKFLOW_STATUSES.CREATED;
+    for (const evt of events) {
+      if (!evt || !evt.eventType) continue;
+      const target = WORKFLOW_EVENT_TO_STATUS[evt.eventType];
+      if (target) {
+        currentStatus = target;
+      }
+    }
+    if (currentStatus === WORKFLOW_STATUSES.CREATED) {
+      return deriveWorkflowStatusLegacy(db, clockId);
+    }
+    return currentStatus;
+  } catch {
+    return deriveWorkflowStatusLegacy(db, clockId);
+  }
+}
+
+function deriveWorkflowStatusLegacy(db, clockId) {
   const clockAdjustments = db.adjustments
     .filter((a) => a.clockId === clockId)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -283,6 +361,41 @@ function deriveWorkflowStatus(db, clockId) {
   return WORKFLOW_STATUSES.CREATED;
 }
 
+function recordWorkflowEvent(db, { clockId, eventType, occurredAt, createdBy, note, relatedAdjustmentId, relatedRetestId, meta }) {
+  if (!db.workflowEvents) db.workflowEvents = [];
+  const event = {
+    id: makeId("wfevt"),
+    clockId,
+    eventType,
+    occurredAt: occurredAt || new Date().toISOString(),
+    createdBy: createdBy || null,
+    note: note || "",
+    relatedAdjustmentId: relatedAdjustmentId || null,
+    relatedRetestId: relatedRetestId || null,
+    meta: meta || null
+  };
+  db.workflowEvents.push(event);
+  return event;
+}
+
+function getWorkflowTimeline(db, clockId) {
+  const events = getClockWorkflowEvents(db, clockId);
+  return events.map((evt) => ({
+    ...evt,
+    eventTypeLabel: WORKFLOW_EVENT_TYPE_LABELS[evt.eventType] || evt.eventType,
+    statusAfter: WORKFLOW_EVENT_TO_STATUS[evt.eventType] || null,
+    statusAfterLabel: WORKFLOW_EVENT_TO_STATUS[evt.eventType]
+      ? WORKFLOW_STATUS_LABELS[WORKFLOW_EVENT_TO_STATUS[evt.eventType]]
+      : null,
+    creator: evt.createdBy
+      ? (() => {
+          const u = db.users.find((x) => x.id === evt.createdBy);
+          return u ? { id: u.id, name: u.name, role: u.role } : null;
+        })()
+      : null
+  }));
+}
+
 function canTransition(currentStatus, targetStatus) {
   const allowed = WORKFLOW_TRANSITIONS[currentStatus] || [];
   return allowed.includes(targetStatus);
@@ -302,6 +415,9 @@ function validateWorkflowTransition(currentStatus, operation) {
       break;
     case WORKFLOW_OPERATIONS.ARCHIVE:
       targetStatus = WORKFLOW_STATUSES.ARCHIVED;
+      break;
+    case WORKFLOW_OPERATIONS.UNARCHIVE_RECHECK:
+      targetStatus = WORKFLOW_STATUSES.PENDING_RETEST;
       break;
     default:
       targetStatus = null;
@@ -338,6 +454,7 @@ function getWorkflowAllowedOperations(currentStatus) {
       allowed.push(WORKFLOW_OPERATIONS.ARCHIVE, WORKFLOW_OPERATIONS.SUBMIT_RETEST);
       break;
     case WORKFLOW_STATUSES.ARCHIVED:
+      allowed.push(WORKFLOW_OPERATIONS.UNARCHIVE_RECHECK);
       break;
   }
   return allowed;
@@ -352,6 +469,7 @@ function buildWorkflowStatusInfo(db, clockId) {
   const retests = db.retests
     .filter((r) => r.clockId === clockId)
     .sort((a, b) => new Date(a.testedAt) - new Date(b.testedAt));
+  const timeline = getWorkflowTimeline(db, clockId);
 
   return {
     clockId,
@@ -363,7 +481,10 @@ function buildWorkflowStatusInfo(db, clockId) {
     latestAdjustment: adjustments.length > 0 ? adjustments[adjustments.length - 1] : null,
     latestRetest: retests.length > 0 ? retests[retests.length - 1] : null,
     transitions: WORKFLOW_TRANSITIONS,
-    statusLabels: WORKFLOW_STATUS_LABELS
+    statusLabels: WORKFLOW_STATUS_LABELS,
+    timeline,
+    eventTypes: WORKFLOW_EVENT_TYPES,
+    eventTypeLabels: WORKFLOW_EVENT_TYPE_LABELS
   };
 }
 
@@ -423,7 +544,9 @@ const CONFIRMATION_TOKEN_TTL_MS = 10 * 60 * 1000;
 const WORKFLOW_KEY_FIELDS = [
   "workflowArchived",
   "workflowArchivedAt",
-  "workflowArchiveNote"
+  "workflowArchiveNote",
+  "workflowUnarchivedAt",
+  "workflowUnarchiveNote"
 ];
 
 const routes = [
@@ -453,6 +576,8 @@ const routes = [
   "POST /clocks/:id/workflow/complete-retest",
   "POST /clocks/:id/workflow/rework",
   "POST /clocks/:id/workflow/archive",
+  "POST /clocks/:id/workflow/unarchive-recheck",
+  "GET /clocks/:id/workflow-events",
   "POST /clocks/:id/adjustments",
   "POST /clocks/:id/retests",
   "GET /clocks/:id/latest-retest",
@@ -2093,13 +2218,167 @@ async function ensureDb() {
   const needsMigration3 = migrateDbAddHandoverFields(dbData);
   const needsMigration4 = migrateDbAddHealthScoreRules(dbData);
   const needsMigration5 = migrateDbAddSuggestionStatusFields(dbData);
+  const needsMigration6 = migrateDbGenerateWorkflowEvents(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || needsMigration5 || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || needsMigration5 || needsMigration6 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
+}
+
+function migrateDbGenerateWorkflowEvents(dbData) {
+  let changed = false;
+  if (!dbData.workflowEvents || !Array.isArray(dbData.workflowEvents)) {
+    dbData.workflowEvents = [];
+    changed = true;
+  }
+  if (!Array.isArray(dbData.clocks)) return changed;
+  try {
+    for (const clock of dbData.clocks) {
+      if (!clock || !clock.id) continue;
+      const existingForClock = dbData.workflowEvents.filter((e) => e && e.clockId === clock.id);
+      if (existingForClock.length > 0) continue;
+      const eventsForClock = generateWorkflowEventsFromLegacy(dbData, clock);
+      if (eventsForClock && eventsForClock.length > 0) {
+        dbData.workflowEvents.push(...eventsForClock);
+        changed = true;
+      }
+    }
+  } catch (e) {
+    console.error("migrateDbGenerateWorkflowEvents error:", e && e.message ? e.message : e);
+  }
+  return changed;
+}
+
+function generateWorkflowEventsFromLegacy(dbData, clock) {
+  if (!clock || !clock.id) return [];
+  const result = [];
+  const clockId = clock.id;
+  try {
+    const adjustments = (dbData.adjustments || [])
+      .filter((a) => a && a.clockId === clockId)
+      .sort((a, b) => {
+        const ta = safeParseDate(a.createdAt) || new Date(0);
+        const tb = safeParseDate(b.createdAt) || new Date(0);
+        return ta - tb;
+      });
+    const retests = (dbData.retests || [])
+      .filter((r) => r && r.clockId === clockId)
+      .sort((a, b) => {
+        const ta = safeParseDate(a.testedAt) || new Date(0);
+        const tb = safeParseDate(b.testedAt) || new Date(0);
+        return ta - tb;
+      });
+
+    const timeline = [];
+    for (const adj of adjustments) {
+      timeline.push({ kind: "adj", item: adj, time: safeParseDate(adj.createdAt) || new Date(0) });
+    }
+    for (const rt of retests) {
+      timeline.push({ kind: "retest", item: rt, time: safeParseDate(rt.testedAt) || new Date(0) });
+    }
+    timeline.sort((a, b) => a.time - b.time);
+
+    let hadInitialAdjust = false;
+
+    for (const entry of timeline) {
+      if (entry.kind === "adj") {
+        const adj = entry.item;
+        let eventType = null;
+        const op = adj.workflowOperation;
+        if (op === WORKFLOW_OPERATIONS.INITIAL_ADJUST) {
+          eventType = WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED;
+          hadInitialAdjust = true;
+        } else if (op === WORKFLOW_OPERATIONS.SUBMIT_RETEST) {
+          eventType = WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST;
+        } else if (op === WORKFLOW_OPERATIONS.REWORK) {
+          eventType = WORKFLOW_EVENT_TYPES.REWORKED;
+        } else {
+          if (!hadInitialAdjust) {
+            eventType = WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED;
+            hadInitialAdjust = true;
+          } else {
+            eventType = WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST;
+          }
+        }
+        result.push({
+          id: makeId("wfevt"),
+          clockId,
+          eventType,
+          occurredAt: adj.createdAt || new Date().toISOString(),
+          createdBy: adj.createdBy || null,
+          note: adj.note || "",
+          relatedAdjustmentId: adj.id || null,
+          relatedRetestId: null,
+          meta: { source: "migration_legacy", legacyWorkflowOperation: op || null }
+        });
+      } else if (entry.kind === "retest") {
+        const rt = entry.item;
+        const eventType = rt.qualified
+          ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
+          : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
+        result.push({
+          id: makeId("wfevt"),
+          clockId,
+          eventType,
+          occurredAt: rt.testedAt || new Date().toISOString(),
+          createdBy: rt.createdBy || null,
+          note: rt.note || "",
+          relatedAdjustmentId: rt.adjustmentId || null,
+          relatedRetestId: rt.id || null,
+          meta: { source: "migration_legacy", qualified: Boolean(rt.qualified) }
+        });
+      }
+    }
+
+    if (clock.workflowArchived) {
+      const lastPassedIdx = [...result].reverse().findIndex(
+        (e) => e.eventType === WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
+      );
+      let occurredAt = clock.workflowArchivedAt || null;
+      if (!occurredAt && lastPassedIdx >= 0) {
+        const lastPassed = result[result.length - 1 - lastPassedIdx];
+        const base = safeParseDate(lastPassed.occurredAt) || new Date();
+        occurredAt = new Date(base.getTime() + 1000).toISOString();
+      }
+      if (!occurredAt) occurredAt = new Date().toISOString();
+      result.push({
+        id: makeId("wfevt"),
+        clockId,
+        eventType: WORKFLOW_EVENT_TYPES.ARCHIVED,
+        occurredAt,
+        createdBy: null,
+        note: clock.workflowArchiveNote || "",
+        relatedAdjustmentId: null,
+        relatedRetestId: null,
+        meta: { source: "migration_legacy" }
+      });
+    }
+
+    result.sort((a, b) => {
+      const ta = safeParseDate(a.occurredAt) || new Date(0);
+      const tb = safeParseDate(b.occurredAt) || new Date(0);
+      return ta - tb;
+    });
+
+    let fixed = true;
+    while (fixed) {
+      fixed = false;
+      for (let i = 1; i < result.length; i++) {
+        const prev = safeParseDate(result[i - 1].occurredAt) || new Date(0);
+        const curr = safeParseDate(result[i].occurredAt) || new Date(0);
+        if (curr.getTime() <= prev.getTime()) {
+          result[i].occurredAt = new Date(prev.getTime() + 1).toISOString();
+          fixed = true;
+        }
+      }
+    }
+  } catch (e) {
+    console.error("generateWorkflowEventsFromLegacy error for clock", clock && clock.id, e && e.message ? e.message : e);
+  }
+  return result;
 }
 
 function migrateDbAddHealthScoreRules(dbData) {
@@ -3176,8 +3455,11 @@ async function handle(req, res) {
           [WORKFLOW_OPERATIONS.SUBMIT_RETEST]: "提交复测",
           [WORKFLOW_OPERATIONS.COMPLETE_RETEST]: "完成复测",
           [WORKFLOW_OPERATIONS.REWORK]: "返工调校",
-          [WORKFLOW_OPERATIONS.ARCHIVE]: "达标归档"
-        }
+          [WORKFLOW_OPERATIONS.ARCHIVE]: "达标归档",
+          [WORKFLOW_OPERATIONS.UNARCHIVE_RECHECK]: "归档后复检"
+        },
+        eventTypes: WORKFLOW_EVENT_TYPES,
+        eventTypeLabels: WORKFLOW_EVENT_TYPE_LABELS
       }
     });
   }
@@ -3238,6 +3520,16 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED,
+        occurredAt: adjustment.createdAt,
+        createdBy: currentUser.id,
+        note: adjustment.note,
+        relatedAdjustmentId: adjustment.id
+      });
+    } catch (_) {}
     await writeDb(db);
     return send(res, 201, {
       data: enrichWithCreator(db, adjustment),
@@ -3290,6 +3582,19 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      const evtType = currentStatus === WORKFLOW_STATUSES.RETEST_FAILED
+        ? WORKFLOW_EVENT_TYPES.REWORKED
+        : WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST;
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: evtType,
+        occurredAt: adjustment.createdAt,
+        createdBy: currentUser.id,
+        note: adjustment.note,
+        relatedAdjustmentId: adjustment.id
+      });
+    } catch (_) {}
     if (body.plannedRetestAt && body.priority) {
       const task = {
         id: makeId("retestTask"),
@@ -3389,6 +3694,21 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      const evtType = retest.qualified
+        ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
+        : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: evtType,
+        occurredAt: retest.testedAt,
+        createdBy: currentUser.id,
+        note: retest.note,
+        relatedAdjustmentId: retest.adjustmentId,
+        relatedRetestId: retest.id,
+        meta: { qualified: retest.qualified, dailyRateSeconds: retest.dailyRateSeconds, amplitude: retest.amplitude }
+      });
+    } catch (_) {}
     if (db.retestTasks) {
       let matchingTask = targetTask;
       if (!matchingTask) {
@@ -3465,6 +3785,16 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: WORKFLOW_EVENT_TYPES.REWORKED,
+        occurredAt: adjustment.createdAt,
+        createdBy: currentUser.id,
+        note: adjustment.note,
+        relatedAdjustmentId: adjustment.id
+      });
+    } catch (_) {}
     if (body.plannedRetestAt && body.priority) {
       const task = {
         id: makeId("retestTask"),
@@ -3517,6 +3847,16 @@ async function handle(req, res) {
       createdBy: currentUser.id
     });
 
+    try {
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: WORKFLOW_EVENT_TYPES.ARCHIVED,
+        occurredAt: clock.workflowArchivedAt,
+        createdBy: currentUser.id,
+        note: clock.workflowArchiveNote
+      });
+    } catch (_) {}
+
     await writeDb(db);
     return send(res, 200, {
       data: {
@@ -3526,6 +3866,105 @@ async function handle(req, res) {
         note: clock.workflowArchiveNote
       },
       workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowUnarchiveRecheckMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/unarchive-recheck$/);
+  if (workflowUnarchiveRecheckMatch && req.method === "POST") {
+    requireAdmin(req, db);
+    const clock = findClock(db, workflowUnarchiveRecheckMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.UNARCHIVE_RECHECK);
+    const body = await parseBody(req);
+    const beforeSnapshot = extractKeyFields(clock, WORKFLOW_KEY_FIELDS);
+    clock.workflowArchived = false;
+    clock.workflowArchivedAt = null;
+    clock.workflowUnarchivedAt = new Date().toISOString();
+    clock.workflowUnarchiveNote = body.note || "";
+    clock.updatedAt = new Date().toISOString();
+    const afterSnapshot = extractKeyFields(clock, WORKFLOW_KEY_FIELDS);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE,
+      resourceType: AUDIT_RESOURCE_TYPES.WORKFLOW,
+      resourceId: clock.id,
+      clockId: clock.id,
+      beforeSnapshot,
+      afterSnapshot,
+      changedFields: summarizeFieldChanges(beforeSnapshot, afterSnapshot, WORKFLOW_KEY_FIELDS),
+      createdBy: currentUser.id
+    });
+
+    const evtOccurredAt = clock.workflowUnarchivedAt;
+    try {
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK,
+        occurredAt: evtOccurredAt,
+        createdBy: currentUser.id,
+        note: clock.workflowUnarchiveNote
+      });
+    } catch (_) {}
+
+    if (body.plannedRetestAt && body.priority) {
+      const task = {
+        id: makeId("retestTask"),
+        clockId: clock.id,
+        adjustmentId: null,
+        plannedRetestAt: body.plannedRetestAt,
+        priority: body.priority,
+        status: "pending",
+        completedAt: null,
+        completedRetestId: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        cancelReason: null,
+        note: body.retestTaskNote || "归档后复检任务",
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id
+      };
+      if (!db.retestTasks) db.retestTasks = [];
+      db.retestTasks.push(task);
+    }
+
+    await writeDb(db);
+    return send(res, 200, {
+      data: {
+        unarchived: true,
+        clockId: clock.id,
+        unarchivedAt: evtOccurredAt,
+        note: clock.workflowUnarchiveNote
+      },
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowEventsMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow-events$/);
+  if (workflowEventsMatch && req.method === "GET") {
+    requireAuth(req, db);
+    const clock = findClock(db, workflowEventsMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const timeline = getWorkflowTimeline(db, clock.id);
+    return send(res, 200, {
+      data: {
+        clockId: clock.id,
+        timeline,
+        total: timeline.length,
+        eventTypes: WORKFLOW_EVENT_TYPES,
+        eventTypeLabels: WORKFLOW_EVENT_TYPE_LABELS,
+        generatedAt: new Date().toISOString()
+      }
     });
   }
 
