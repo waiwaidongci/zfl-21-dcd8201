@@ -164,7 +164,16 @@ const AUDIT_OPERATION_TYPES = {
   HANDOVER_CREATE: "handover_create",
   TECHNICIAN_ASSIGN: "technician_assign",
   SUGGESTION_CREATE: "suggestion_create",
-  SUGGESTION_STATUS_UPDATE: "suggestion_status_update"
+  SUGGESTION_STATUS_UPDATE: "suggestion_status_update",
+  RETEST_TASK_CREATE: "retest_task_create",
+  RETEST_TASK_UPDATE: "retest_task_update",
+  RETEST_TASK_CANCEL: "retest_task_cancel",
+  USER_CREATE: "user_create",
+  USER_UPDATE: "user_update",
+  USER_DELETE: "user_delete",
+  BACKUP_CREATE: "backup_create",
+  BACKUP_RESTORE: "backup_restore",
+  WORKFLOW_ARCHIVE: "workflow_archive"
 };
 
 const AUDIT_RESOURCE_TYPES = {
@@ -172,7 +181,11 @@ const AUDIT_RESOURCE_TYPES = {
   ADJUSTMENT: "adjustment",
   RETEST: "retest",
   HANDOVER: "handover",
-  SUGGESTION: "suggestion"
+  SUGGESTION: "suggestion",
+  RETEST_TASK: "retest_task",
+  USER: "user",
+  BACKUP: "backup",
+  WORKFLOW: "workflow"
 };
 
 const SUGGESTION_STATUSES = {
@@ -358,6 +371,32 @@ const CLOCK_KEY_FIELDS = [
   "balanceFrequency",
   "targetDailyRateSeconds",
   "note"
+];
+
+const RETEST_TASK_KEY_FIELDS = [
+  "plannedRetestAt",
+  "priority",
+  "status",
+  "note"
+];
+
+const USER_KEY_FIELDS = [
+  "username",
+  "name",
+  "role"
+];
+
+const BACKUP_KEY_FIELDS = [
+  "id",
+  "createdAt",
+  "size",
+  "counts"
+];
+
+const WORKFLOW_KEY_FIELDS = [
+  "workflowArchived",
+  "workflowArchivedAt",
+  "workflowArchiveNote"
 ];
 
 const routes = [
@@ -1238,6 +1277,32 @@ function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSna
       const beforeStatus = beforeSnapshot?.status ? SUGGESTION_STATUS_LABELS[beforeSnapshot.status] || beforeSnapshot.status : "待处理";
       const afterStatus = afterSnapshot?.status ? SUGGESTION_STATUS_LABELS[afterSnapshot.status] || afterSnapshot.status : "";
       return `建议状态变更：${beforeStatus} → ${afterStatus}`;
+    case AUDIT_OPERATION_TYPES.RETEST_TASK_CREATE:
+      return `创建复测任务，计划时间：${afterSnapshot?.plannedRetestAt || ""}，优先级：${afterSnapshot?.priority || ""}`;
+    case AUDIT_OPERATION_TYPES.RETEST_TASK_UPDATE:
+      if (changedFields) {
+        const fieldNames = changedFields.map((f) => f.field).join("、");
+        return `更新复测任务，变更字段：${fieldNames}`;
+      }
+      return `更新复测任务`;
+    case AUDIT_OPERATION_TYPES.RETEST_TASK_CANCEL:
+      return `取消复测任务，原因：${afterSnapshot?.cancelReason || "无"}`;
+    case AUDIT_OPERATION_TYPES.USER_CREATE:
+      return `创建用户 ${afterSnapshot?.username || ""}（${afterSnapshot?.name || ""}），角色：${afterSnapshot?.role || ""}`;
+    case AUDIT_OPERATION_TYPES.USER_UPDATE:
+      if (changedFields) {
+        const fieldNames = changedFields.map((f) => f.field).join("、");
+        return `更新用户 ${afterSnapshot?.username || beforeSnapshot?.username || ""} 字段：${fieldNames}`;
+      }
+      return `更新用户 ${afterSnapshot?.username || beforeSnapshot?.username || ""}`;
+    case AUDIT_OPERATION_TYPES.USER_DELETE:
+      return `删除用户 ${beforeSnapshot?.username || ""}（${beforeSnapshot?.name || ""}）`;
+    case AUDIT_OPERATION_TYPES.BACKUP_CREATE:
+      return `创建数据备份 ${afterSnapshot?.id || ""}`;
+    case AUDIT_OPERATION_TYPES.BACKUP_RESTORE:
+      return `恢复数据备份 ${beforeSnapshot?.id || afterSnapshot?.id || ""}`;
+    case AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE:
+      return `工作流归档，备注：${afterSnapshot?.workflowArchiveNote || "无"}`;
     default:
       return `${operationType} ${resourceType}`;
   }
@@ -1275,24 +1340,55 @@ function createAuditLog(db, params) {
 }
 
 function enrichAuditLog(db, log) {
-  const clock = db.clocks.find((c) => c.id === log.clockId) || null;
+  const safeLog = {
+    id: log.id,
+    operationType: log.operationType || null,
+    resourceType: log.resourceType || null,
+    resourceId: log.resourceId || null,
+    clockId: log.clockId || null,
+    beforeSnapshot: log.beforeSnapshot ?? null,
+    afterSnapshot: log.afterSnapshot ?? null,
+    changedFields: log.changedFields ?? null,
+    summary: log.summary || null,
+    createdAt: log.createdAt || null,
+    createdBy: log.createdBy || null
+  };
+
+  const clock = safeLog.clockId ? (db.clocks.find((c) => c.id === safeLog.clockId) || null) : null;
   let resource = null;
-  switch (log.resourceType) {
+  switch (safeLog.resourceType) {
     case AUDIT_RESOURCE_TYPES.CLOCK:
       resource = clock ? { id: clock.id, code: clock.code } : null;
       break;
     case AUDIT_RESOURCE_TYPES.ADJUSTMENT:
-      resource = db.adjustments.find((a) => a.id === log.resourceId) || null;
+      resource = safeLog.resourceId ? (db.adjustments.find((a) => a.id === safeLog.resourceId) || null) : null;
       break;
     case AUDIT_RESOURCE_TYPES.RETEST:
-      resource = db.retests.find((r) => r.id === log.resourceId) || null;
+      resource = safeLog.resourceId ? (db.retests.find((r) => r.id === safeLog.resourceId) || null) : null;
       break;
     case AUDIT_RESOURCE_TYPES.HANDOVER:
-      resource = db.handovers.find((h) => h.id === log.resourceId) || null;
+      resource = safeLog.resourceId ? (db.handovers.find((h) => h.id === safeLog.resourceId) || null) : null;
       break;
+    case AUDIT_RESOURCE_TYPES.SUGGESTION:
+      resource = safeLog.resourceId ? (db.suggestions.find((s) => s.id === safeLog.resourceId) || null) : null;
+      break;
+    case AUDIT_RESOURCE_TYPES.RETEST_TASK:
+      resource = safeLog.resourceId ? ((db.retestTasks || []).find((t) => t.id === safeLog.resourceId) || null) : null;
+      break;
+    case AUDIT_RESOURCE_TYPES.USER:
+      resource = safeLog.resourceId ? (db.users.find((u) => u.id === safeLog.resourceId) || null) : null;
+      break;
+    case AUDIT_RESOURCE_TYPES.BACKUP:
+      resource = safeLog.resourceId ? { id: safeLog.resourceId } : null;
+      break;
+    case AUDIT_RESOURCE_TYPES.WORKFLOW:
+      resource = clock ? { id: clock.id, code: clock.code } : null;
+      break;
+    default:
+      resource = null;
   }
   return {
-    ...log,
+    ...safeLog,
     clock: clock ? { id: clock.id, code: clock.code } : null,
     resource
   };
@@ -2073,6 +2169,18 @@ async function handle(req, res) {
       createdAt: new Date().toISOString()
     };
     db.users.push(user);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.USER_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.USER,
+      resourceId: user.id,
+      clockId: null,
+      beforeSnapshot: null,
+      afterSnapshot: extractKeyFields(user, USER_KEY_FIELDS),
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
     return send(res, 201, { data: userSummary(user) });
   }
@@ -2082,6 +2190,7 @@ async function handle(req, res) {
     requireAdmin(req, db);
     const user = findUser(db, userUpdateMatch[1]);
     const body = await parseBody(req);
+    const beforeSnapshot = extractKeyFields(user, USER_KEY_FIELDS);
     if (body.name !== undefined) user.name = body.name;
     if (body.role !== undefined) {
       const validRoles = Object.values(USER_ROLES);
@@ -2093,6 +2202,20 @@ async function handle(req, res) {
       user.role = body.role;
     }
     user.updatedAt = new Date().toISOString();
+    const afterSnapshot = extractKeyFields(user, USER_KEY_FIELDS);
+    const changedFields = summarizeFieldChanges(beforeSnapshot, afterSnapshot, USER_KEY_FIELDS);
+    if (changedFields) {
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.USER_UPDATE,
+        resourceType: AUDIT_RESOURCE_TYPES.USER,
+        resourceId: user.id,
+        clockId: null,
+        beforeSnapshot,
+        afterSnapshot,
+        changedFields,
+        createdBy: currentUser.id
+      });
+    }
     await writeDb(db);
     return send(res, 200, { data: userSummary(user) });
   }
@@ -2118,6 +2241,18 @@ async function handle(req, res) {
         clock.assignedTechnicianId = null;
       }
     }
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.USER_DELETE,
+      resourceType: AUDIT_RESOURCE_TYPES.USER,
+      resourceId: deletedUser.id,
+      clockId: null,
+      beforeSnapshot: extractKeyFields(deletedUser, USER_KEY_FIELDS),
+      afterSnapshot: null,
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
     return send(res, 200, { data: userSummary(deletedUser) });
   }
@@ -2715,7 +2850,13 @@ async function handle(req, res) {
       [AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE]: "新增调校",
       [AUDIT_OPERATION_TYPES.RETEST_CREATE]: "新增复测",
       [AUDIT_OPERATION_TYPES.HANDOVER_CREATE]: "师傅交接",
-      [AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN]: "负责人变更"
+      [AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN]: "负责人变更",
+      [AUDIT_OPERATION_TYPES.SUGGESTION_CREATE]: "创建建议",
+      [AUDIT_OPERATION_TYPES.SUGGESTION_STATUS_UPDATE]: "建议状态更新",
+      [AUDIT_OPERATION_TYPES.RETEST_TASK_CREATE]: "创建复测任务",
+      [AUDIT_OPERATION_TYPES.RETEST_TASK_UPDATE]: "更新复测任务",
+      [AUDIT_OPERATION_TYPES.RETEST_TASK_CANCEL]: "取消复测任务",
+      [AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE]: "工作流归档"
     };
 
     const timeline = logs.map((log) => ({
@@ -2729,7 +2870,13 @@ async function handle(req, res) {
       adjustmentCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE).length,
       retestCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_CREATE).length,
       handoverCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.HANDOVER_CREATE).length,
-      technicianAssign: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN).length
+      technicianAssign: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN).length,
+      suggestionCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.SUGGESTION_CREATE).length,
+      suggestionStatusUpdate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.SUGGESTION_STATUS_UPDATE).length,
+      retestTaskCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_TASK_CREATE).length,
+      retestTaskUpdate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_TASK_UPDATE).length,
+      retestTaskCancel: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_TASK_CANCEL).length,
+      workflowArchive: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE).length
     };
 
     return send(res, 200, {
@@ -2739,7 +2886,11 @@ async function handle(req, res) {
         total: logs.length,
         stats,
         operationTypeLabels,
-        keyFields: CLOCK_KEY_FIELDS,
+        keyFields: {
+          clock: CLOCK_KEY_FIELDS,
+          retestTask: RETEST_TASK_KEY_FIELDS,
+          workflow: WORKFLOW_KEY_FIELDS
+        },
         generatedAt: new Date().toISOString()
       }
     });
@@ -2750,10 +2901,13 @@ async function handle(req, res) {
     const operationType = url.searchParams.get("operationType");
     const resourceType = url.searchParams.get("resourceType");
     const clockId = url.searchParams.get("clockId");
+    const createdBy = url.searchParams.get("createdBy");
+    const createdFrom = url.searchParams.get("createdFrom");
+    const createdTo = url.searchParams.get("createdTo");
     let data = listAllAuditLogs(db);
     if (currentUser.role !== USER_ROLES.ADMIN) {
       const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
-      data = data.filter((log) => accessibleClockIds.has(log.clockId));
+      data = data.filter((log) => log.clockId === undefined || log.clockId === null || accessibleClockIds.has(log.clockId));
     }
     if (operationType) {
       data = data.filter((log) => log.operationType === operationType);
@@ -2764,13 +2918,48 @@ async function handle(req, res) {
     if (clockId) {
       data = data.filter((log) => log.clockId === clockId);
     }
+    if (createdBy) {
+      data = data.filter((log) => log.createdBy === createdBy);
+    }
+    if (createdFrom) {
+      const fromTime = new Date(createdFrom).getTime();
+      if (!isNaN(fromTime)) {
+        data = data.filter((log) => {
+          const logTime = log.createdAt ? new Date(log.createdAt).getTime() : NaN;
+          return !isNaN(logTime) && logTime >= fromTime;
+        });
+      }
+    }
+    if (createdTo) {
+      const toTime = new Date(createdTo).getTime();
+      if (!isNaN(toTime)) {
+        data = data.filter((log) => {
+          const logTime = log.createdAt ? new Date(log.createdAt).getTime() : NaN;
+          return !isNaN(logTime) && logTime <= toTime;
+        });
+      }
+    }
     data = data.map((log) => enrichWithCreator(db, log));
     return send(res, 200, {
       data,
       total: data.length,
       operationTypes: AUDIT_OPERATION_TYPES,
       resourceTypes: AUDIT_RESOURCE_TYPES,
-      keyFields: CLOCK_KEY_FIELDS
+      keyFields: {
+        clock: CLOCK_KEY_FIELDS,
+        retestTask: RETEST_TASK_KEY_FIELDS,
+        user: USER_KEY_FIELDS,
+        backup: BACKUP_KEY_FIELDS,
+        workflow: WORKFLOW_KEY_FIELDS
+      },
+      filters: {
+        operationType,
+        resourceType,
+        clockId,
+        createdBy,
+        createdFrom,
+        createdTo
+      }
     });
   }
 
@@ -3109,10 +3298,24 @@ async function handle(req, res) {
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.ARCHIVE);
     const body = await parseBody(req);
+    const beforeSnapshot = extractKeyFields(clock, WORKFLOW_KEY_FIELDS);
     clock.workflowArchived = true;
     clock.workflowArchivedAt = new Date().toISOString();
     clock.workflowArchiveNote = body.note || "";
     clock.updatedAt = new Date().toISOString();
+    const afterSnapshot = extractKeyFields(clock, WORKFLOW_KEY_FIELDS);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE,
+      resourceType: AUDIT_RESOURCE_TYPES.WORKFLOW,
+      resourceId: clock.id,
+      clockId: clock.id,
+      beforeSnapshot,
+      afterSnapshot,
+      changedFields: summarizeFieldChanges(beforeSnapshot, afterSnapshot, WORKFLOW_KEY_FIELDS),
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
     return send(res, 200, {
       data: {
@@ -3594,6 +3797,18 @@ async function handle(req, res) {
     };
     if (!db.retestTasks) db.retestTasks = [];
     db.retestTasks.push(task);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.RETEST_TASK_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.RETEST_TASK,
+      resourceId: task.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: extractKeyFields(task, RETEST_TASK_KEY_FIELDS),
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
     return send(res, 201, {
       data: enrichWithCanceller(db, enrichWithCreator(db, {
@@ -3656,6 +3871,8 @@ async function handle(req, res) {
       error.status = 400;
       throw error;
     }
+    const beforeSnapshot = extractKeyFields(task, RETEST_TASK_KEY_FIELDS);
+
     if (body.plannedRetestAt !== undefined) {
       task.plannedRetestAt = body.plannedRetestAt;
     }
@@ -3666,6 +3883,22 @@ async function handle(req, res) {
       task.note = body.note;
     }
     task.updatedAt = new Date().toISOString();
+
+    const afterSnapshot = extractKeyFields(task, RETEST_TASK_KEY_FIELDS);
+    const changedFields = summarizeFieldChanges(beforeSnapshot, afterSnapshot, RETEST_TASK_KEY_FIELDS);
+    if (changedFields) {
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.RETEST_TASK_UPDATE,
+        resourceType: AUDIT_RESOURCE_TYPES.RETEST_TASK,
+        resourceId: task.id,
+        clockId: task.clockId,
+        beforeSnapshot,
+        afterSnapshot,
+        changedFields,
+        createdBy: currentUser.id
+      });
+    }
+
     await writeDb(db);
     return send(res, 200, {
       data: enrichRetestTask(db, task)
@@ -3696,10 +3929,28 @@ async function handle(req, res) {
     }
     const body = await parseBody(req);
     required(body, ["cancelReason"]);
+    const beforeSnapshot = extractKeyFields(task, RETEST_TASK_KEY_FIELDS);
     task.status = "cancelled";
     task.cancelledAt = new Date().toISOString();
     task.cancelledBy = currentUser.id;
     task.cancelReason = body.cancelReason;
+    const afterSnapshot = {
+      ...extractKeyFields(task, RETEST_TASK_KEY_FIELDS),
+      cancelReason: task.cancelReason,
+      cancelledAt: task.cancelledAt
+    };
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.RETEST_TASK_CANCEL,
+      resourceType: AUDIT_RESOURCE_TYPES.RETEST_TASK,
+      resourceId: task.id,
+      clockId: task.clockId,
+      beforeSnapshot,
+      afterSnapshot,
+      changedFields: summarizeFieldChanges(beforeSnapshot, afterSnapshot, RETEST_TASK_KEY_FIELDS.concat(["cancelReason", "cancelledAt"])),
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
     return send(res, 200, {
       data: enrichRetestTask(db, task)
@@ -3925,6 +4176,19 @@ async function handle(req, res) {
   if (req.method === "POST" && pathname === "/backups") {
     requireAdmin(req, db);
     const backup = await createBackup();
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.BACKUP_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.BACKUP,
+      resourceId: backup.id,
+      clockId: null,
+      beforeSnapshot: null,
+      afterSnapshot: extractKeyFields(backup, BACKUP_KEY_FIELDS),
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+    await writeDb(db);
+
     return send(res, 201, { data: backup });
   }
 
@@ -3948,7 +4212,28 @@ async function handle(req, res) {
   const restoreBackupMatch = pathname.match(/^\/backups\/([^/]+)\/restore$/);
   if (restoreBackupMatch && req.method === "POST") {
     requireAdmin(req, db);
-    const result = await restoreBackup(restoreBackupMatch[1]);
+    const backupId = restoreBackupMatch[1];
+    const result = await restoreBackup(backupId);
+
+    const restoredDb = await readDb();
+    createAuditLog(restoredDb, {
+      operationType: AUDIT_OPERATION_TYPES.BACKUP_RESTORE,
+      resourceType: AUDIT_RESOURCE_TYPES.BACKUP,
+      resourceId: backupId,
+      clockId: null,
+      beforeSnapshot: {
+        id: backupId
+      },
+      afterSnapshot: {
+        id: backupId,
+        restoredAt: result.restoredAt,
+        counts: result.counts
+      },
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+    await writeDb(restoredDb);
+
     return send(res, 200, { data: result });
   }
 

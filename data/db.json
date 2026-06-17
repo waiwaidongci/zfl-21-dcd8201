@@ -5,28 +5,28 @@
       "username": "system",
       "name": "系统",
       "role": "admin",
-      "createdAt": "2026-06-17T02:09:54.870Z"
+      "createdAt": "2026-06-17T10:22:49.419Z"
     },
     {
       "id": "user_admin_default",
       "username": "admin",
       "name": "管理员",
       "role": "admin",
-      "createdAt": "2026-06-17T02:09:54.870Z"
+      "createdAt": "2026-06-17T10:22:49.431Z"
     },
     {
       "id": "user_tech_zhang",
       "username": "zhang",
       "name": "张师傅",
       "role": "technician",
-      "createdAt": "2026-06-17T02:09:54.870Z"
+      "createdAt": "2026-06-17T10:22:49.431Z"
     },
     {
       "id": "user_tech_wang",
       "username": "wang",
       "name": "王师傅",
       "role": "technician",
-      "createdAt": "2026-06-17T02:09:54.870Z"
+      "createdAt": "2026-06-17T10:22:49.431Z"
     }
   ],
   "clocks": [
@@ -37,31 +37,8 @@
       "balanceFrequency": "18000vph",
       "targetDailyRateSeconds": 20,
       "note": "怀表机芯，走时偏快",
-      "assignedTechnicianId": "user_tech_wang",
-      "createdAt": "2026-06-16T00:00:00.000Z",
-      "createdBy": "user_system",
-      "updatedAt": "2026-06-17T06:27:31.738Z"
-    },
-    {
-      "id": "clock_mqgsbyvj_tr66gb",
-      "code": "CLK-1900-01",
-      "escapementType": "英国销轮式",
-      "balanceFrequency": "16000vph",
-      "targetDailyRateSeconds": 30,
-      "note": "爱德华时期座钟",
-      "assignedTechnicianId": "user_admin_default",
-      "createdAt": "2026-06-16T15:16:37.327Z",
-      "createdBy": "user_system"
-    },
-    {
-      "id": "clock_mqgsbyvj_cr3o4k",
-      "code": "CLK-1920-12",
-      "escapementType": "德国工字轮式",
-      "balanceFrequency": "14400vph",
-      "targetDailyRateSeconds": 25,
-      "note": "",
-      "assignedTechnicianId": "user_admin_default",
-      "createdAt": "2026-06-16T15:16:37.327Z",
+      "assignedTechnicianId": "user_tech_zhang",
+      "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system"
     }
   ],
@@ -73,7 +50,7 @@
       "direction": "慢针方向",
       "amount": "游丝快慢针向慢侧微调0.4格",
       "note": "初次调校，先保守处理",
-      "createdAt": "2026-06-16T00:00:00.000Z",
+      "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system"
     }
   ],
@@ -82,33 +59,11 @@
       "id": "retest_demo",
       "clockId": "clock_demo",
       "adjustmentId": "adjustment_demo",
-      "testedAt": "2026-06-16T00:00:00.000Z",
+      "testedAt": "2026-06-17T10:22:49.431Z",
       "dailyRateSeconds": 31,
       "amplitude": 248,
       "qualified": false,
       "note": "仍偏快，振幅尚可",
-      "createdBy": "user_system"
-    },
-    {
-      "id": "retest_mqguyr0d_y1p5we",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "testedAt": "2026-06-16T16:30:19.453Z",
-      "dailyRateSeconds": 22,
-      "amplitude": 260,
-      "qualified": false,
-      "note": "复测完成",
-      "createdBy": "user_system"
-    },
-    {
-      "id": "retest_mqgve4a9_w86qqa",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "testedAt": "2026-06-16T16:42:16.497Z",
-      "dailyRateSeconds": 18,
-      "amplitude": 270,
-      "qualified": true,
-      "note": "精确指定任务复测",
       "createdBy": "user_system"
     }
   ],
@@ -119,35 +74,11 @@
       "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
       "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
       "receiver": "王师傅",
-      "createdAt": "2026-06-16T00:00:00.000Z",
+      "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system",
       "receiverId": "user_tech_wang",
       "previousTechnicianId": "user_system",
       "previousTechnicianName": "系统"
-    },
-    {
-      "id": "handover_mqho6u0r_tzuppk",
-      "clockId": "clock_demo",
-      "handoverNote": "机芯已清洗完毕，游丝轻微变形需注意",
-      "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
-      "receiver": "张师傅",
-      "receiverId": "user_tech_zhang",
-      "previousTechnicianId": "user_admin_default",
-      "previousTechnicianName": "管理员",
-      "createdAt": "2026-06-17T06:08:25.467Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "handover_mqhovehm_920qcc",
-      "clockId": "clock_demo",
-      "handoverNote": "张师傅完成初步调校，建议接手人复测游丝",
-      "nextStepSuggestion": "先看走时稳定性，再检查游丝外桩",
-      "receiver": "王师傅",
-      "receiverId": "user_tech_wang",
-      "previousTechnicianId": "user_tech_zhang",
-      "previousTechnicianName": "张师傅",
-      "createdAt": "2026-06-17T06:27:31.738Z",
-      "createdBy": "user_tech_zhang"
     }
   ],
   "retestTasks": [
@@ -155,430 +86,41 @@
       "id": "retestTask_demo",
       "clockId": "clock_demo",
       "adjustmentId": "adjustment_demo",
-      "plannedRetestAt": "2026-06-23T00:00:00.000Z",
+      "plannedRetestAt": "2026-06-24T10:22:49.431Z",
       "priority": "medium",
-      "status": "completed",
-      "completedAt": "2026-06-16T16:30:19.453Z",
-      "completedRetestId": "retest_mqguyr0d_y1p5we",
+      "status": "pending",
+      "completedAt": null,
+      "completedRetestId": null,
+      "cancelledAt": null,
+      "cancelledBy": null,
+      "cancelReason": null,
       "note": "调校后一周复测",
-      "createdAt": "2026-06-17T00:00:00.000Z",
-      "createdBy": "user_system",
-      "cancelledAt": null,
-      "cancelledBy": null,
-      "cancelReason": null
-    },
-    {
-      "id": "retestTask_mqguylxt_mji5ug",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "plannedRetestAt": "2026-07-05T00:00:00.000Z",
-      "priority": "low",
-      "status": "cancelled",
-      "completedAt": null,
-      "completedRetestId": null,
-      "note": "客户要求延后复测，降低优先级",
-      "createdAt": "2026-06-16T16:30:12.881Z",
-      "createdBy": "user_system",
-      "cancelledAt": "2026-06-17T05:08:37.690Z",
-      "cancelledBy": "user_admin_default",
-      "cancelReason": "客户临时送修其他故障，复测延后安排",
-      "updatedAt": "2026-06-17T05:08:26.032Z"
-    },
-    {
-      "id": "retestTask_readme_pending",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "plannedRetestAt": "2026-07-01T00:00:00.000Z",
-      "priority": "medium",
-      "status": "pending",
-      "completedAt": null,
-      "completedRetestId": null,
-      "note": "README演示用待复测任务",
-      "createdAt": "2026-06-17T05:20:00.000Z",
-      "createdBy": "user_system",
-      "cancelledAt": null,
-      "cancelledBy": null,
-      "cancelReason": null
-    },
-    {
-      "id": "retestTask_mqgvdqfg_izcdn4",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "plannedRetestAt": "2026-06-30T00:00:00.000Z",
-      "priority": "low",
-      "status": "completed",
-      "completedAt": "2026-06-16T16:42:16.497Z",
-      "completedRetestId": "retest_mqgve4a9_w86qqa",
-      "note": "二次复测任务",
-      "createdAt": "2026-06-16T16:41:58.540Z",
-      "createdBy": "user_system",
-      "cancelledAt": null,
-      "cancelledBy": null,
-      "cancelReason": null
-    }
-  ],
-  "suggestions": [
-    {
-      "id": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "targetDailyRateSeconds": 20,
-      "currentDailyRateSeconds": 31,
-      "deviationSeconds": 11,
-      "deviationDescription": "偏快 11.0 秒/天",
-      "suggestedDirection": "慢针方向",
-      "conservativeAmount": "游丝快慢针向慢侧微调0.1格",
-      "conservativeAmountValue": 0.1,
-      "riskWarnings": [
-        "上次调校后日差变化方向与预期一致，可继续沿此方向微调"
-      ],
-      "referenceRetestId": "retest_demo",
-      "referenceAdjustmentId": "adjustment_demo",
-      "note": "初次生成建议，保存备案",
-      "status": "pending",
-      "processedBy": null,
-      "processedAt": null,
-      "appliedAdjustmentId": null,
-      "createdAt": "2026-06-16T16:19:35.505Z",
+      "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system"
     }
   ],
+  "suggestions": [],
+  "healthScoreRules": [],
   "auditLogs": [
     {
-      "id": "audit_mqho6u0r_lj9y6l",
-      "operationType": "handover_create",
-      "resourceType": "handover",
-      "resourceId": "handover_mqho6u0r_tzuppk",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "previousTechnicianId": "user_admin_default",
-        "previousTechnicianName": "管理员"
-      },
-      "afterSnapshot": {
-        "receiverId": "user_tech_zhang",
-        "receiverName": "张师傅",
-        "handoverNote": "机芯已清洗完毕，游丝轻微变形需注意",
-        "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试"
-      },
-      "changedFields": null,
-      "summary": "交接记录：张师傅 接手，备注：机芯已清洗完毕，游丝轻微变形需注意",
-      "createdAt": "2026-06-17T06:08:25.467Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqho6u0r_x4bjs3",
-      "operationType": "technician_assign",
+      "id": "audit_demo",
+      "operationType": "clock_create",
       "resourceType": "clock",
       "resourceId": "clock_demo",
       "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "technicianId": "user_admin_default",
-        "technicianName": "管理员"
-      },
+      "beforeSnapshot": null,
       "afterSnapshot": {
-        "technicianId": "user_tech_zhang",
-        "technicianName": "张师傅"
-      },
-      "changedFields": [
-        {
-          "field": "assignedTechnicianId",
-          "before": "user_admin_default",
-          "after": "user_tech_zhang"
-        }
-      ],
-      "summary": "负责人变更：管理员 → 张师傅",
-      "createdAt": "2026-06-17T06:08:25.467Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqhovehm_4kt8kr",
-      "operationType": "technician_assign",
-      "resourceType": "clock",
-      "resourceId": "clock_demo",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "technicianId": "user_tech_zhang",
-        "technicianName": "张师傅"
-      },
-      "afterSnapshot": {
-        "technicianId": "user_tech_wang",
-        "technicianName": "王师傅"
-      },
-      "changedFields": [
-        {
-          "field": "assignedTechnicianId",
-          "before": "user_tech_zhang",
-          "after": "user_tech_wang"
-        }
-      ],
-      "summary": "负责人变更：张师傅 → 王师傅",
-      "createdAt": "2026-06-17T06:27:31.738Z",
-      "createdBy": "user_tech_zhang"
-    },
-    {
-      "id": "audit_mqhovehm_ql6gpk",
-      "operationType": "handover_create",
-      "resourceType": "handover",
-      "resourceId": "handover_mqhovehm_920qcc",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "previousTechnicianId": "user_tech_zhang",
-        "previousTechnicianName": "张师傅"
-      },
-      "afterSnapshot": {
-        "receiverId": "user_tech_wang",
-        "receiverName": "王师傅",
-        "handoverNote": "张师傅完成初步调校，建议接手人复测游丝",
-        "nextStepSuggestion": "先看走时稳定性，再检查游丝外桩"
+        "id": "clock_demo",
+        "code": "CLK-1890-07",
+        "escapementType": "瑞士杠杆式",
+        "balanceFrequency": "18000vph",
+        "targetDailyRateSeconds": 20,
+        "note": "怀表机芯，走时偏快"
       },
       "changedFields": null,
-      "summary": "交接记录：王师傅 接手，备注：张师傅完成初步调校，建议接手人复测游丝",
-      "createdAt": "2026-06-17T06:27:31.738Z",
-      "createdBy": "user_tech_zhang"
-    },
-    {
-      "id": "audit_mqhvvemd_ivokmq",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "pending",
-        "processedBy": null,
-        "processedAt": null,
-        "appliedAdjustmentId": null
-      },
-      "afterSnapshot": {
-        "status": "accepted",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:43:29.221Z",
-        "appliedAdjustmentId": null
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "pending",
-          "after": "accepted"
-        },
-        {
-          "field": "processedBy",
-          "before": null,
-          "after": "user_admin_default"
-        },
-        {
-          "field": "processedAt",
-          "before": null,
-          "after": "2026-06-17T09:43:29.221Z"
-        }
-      ],
-      "summary": "建议状态变更：待处理 → 已采纳",
-      "createdAt": "2026-06-17T09:43:29.221Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqhvvyuh_3n5uaf",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "accepted",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:43:29.221Z",
-        "appliedAdjustmentId": null
-      },
-      "afterSnapshot": {
-        "status": "pending",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:43:55.433Z",
-        "appliedAdjustmentId": null
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "accepted",
-          "after": "pending"
-        },
-        {
-          "field": "processedAt",
-          "before": "2026-06-17T09:43:29.221Z",
-          "after": "2026-06-17T09:43:55.433Z"
-        }
-      ],
-      "summary": "建议状态变更：已采纳 → 待处理",
-      "createdAt": "2026-06-17T09:43:55.433Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqhvxgci_3d1sg4",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "pending",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:43:55.433Z",
-        "appliedAdjustmentId": null
-      },
-      "afterSnapshot": {
-        "status": "ignored",
-        "processedBy": "user_tech_wang",
-        "processedAt": "2026-06-17T09:45:04.770Z",
-        "appliedAdjustmentId": null
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "pending",
-          "after": "ignored"
-        },
-        {
-          "field": "processedBy",
-          "before": "user_admin_default",
-          "after": "user_tech_wang"
-        },
-        {
-          "field": "processedAt",
-          "before": "2026-06-17T09:43:55.433Z",
-          "after": "2026-06-17T09:45:04.770Z"
-        }
-      ],
-      "summary": "建议状态变更：待处理 → 已忽略",
-      "createdAt": "2026-06-17T09:45:04.770Z",
-      "createdBy": "user_tech_wang"
-    },
-    {
-      "id": "audit_mqhvxhc0_pzw25s",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "ignored",
-        "processedBy": "user_tech_wang",
-        "processedAt": "2026-06-17T09:45:04.770Z",
-        "appliedAdjustmentId": null
-      },
-      "afterSnapshot": {
-        "status": "applied",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:45:06.048Z",
-        "appliedAdjustmentId": "adjustment_demo"
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "ignored",
-          "after": "applied"
-        },
-        {
-          "field": "processedBy",
-          "before": "user_tech_wang",
-          "after": "user_admin_default"
-        },
-        {
-          "field": "processedAt",
-          "before": "2026-06-17T09:45:04.770Z",
-          "after": "2026-06-17T09:45:06.048Z"
-        },
-        {
-          "field": "appliedAdjustmentId",
-          "before": null,
-          "after": "adjustment_demo"
-        }
-      ],
-      "summary": "建议状态变更：已忽略 → 已应用",
-      "createdAt": "2026-06-17T09:45:06.048Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqhvya2q_b3pl8t",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "applied",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:45:06.048Z",
-        "appliedAdjustmentId": "adjustment_demo"
-      },
-      "afterSnapshot": {
-        "status": "ignored",
-        "processedBy": "user_tech_wang",
-        "processedAt": "2026-06-17T09:45:43.297Z",
-        "appliedAdjustmentId": null
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "applied",
-          "after": "ignored"
-        },
-        {
-          "field": "processedBy",
-          "before": "user_admin_default",
-          "after": "user_tech_wang"
-        },
-        {
-          "field": "processedAt",
-          "before": "2026-06-17T09:45:06.048Z",
-          "after": "2026-06-17T09:45:43.297Z"
-        },
-        {
-          "field": "appliedAdjustmentId",
-          "before": "adjustment_demo",
-          "after": null
-        }
-      ],
-      "summary": "建议状态变更：已应用 → 已忽略",
-      "createdAt": "2026-06-17T09:45:43.298Z",
-      "createdBy": "user_tech_wang"
-    },
-    {
-      "id": "audit_mqhvyftb_st6i4e",
-      "operationType": "suggestion_status_update",
-      "resourceType": "suggestion",
-      "resourceId": "suggestion_mqguky4x_jyo4u2",
-      "clockId": "clock_demo",
-      "beforeSnapshot": {
-        "status": "ignored",
-        "processedBy": "user_tech_wang",
-        "processedAt": "2026-06-17T09:45:43.297Z",
-        "appliedAdjustmentId": null
-      },
-      "afterSnapshot": {
-        "status": "applied",
-        "processedBy": "user_admin_default",
-        "processedAt": "2026-06-17T09:45:50.735Z",
-        "appliedAdjustmentId": "adjustment_demo"
-      },
-      "changedFields": [
-        {
-          "field": "status",
-          "before": "ignored",
-          "after": "applied"
-        },
-        {
-          "field": "processedBy",
-          "before": "user_tech_wang",
-          "after": "user_admin_default"
-        },
-        {
-          "field": "processedAt",
-          "before": "2026-06-17T09:45:43.297Z",
-          "after": "2026-06-17T09:45:50.735Z"
-        },
-        {
-          "field": "appliedAdjustmentId",
-          "before": null,
-          "after": "adjustment_demo"
-        }
-      ],
-      "summary": "建议状态变更：已忽略 → 已应用",
-      "createdAt": "2026-06-17T09:45:50.735Z",
-      "createdBy": "user_admin_default"
+      "summary": "创建钟表档案 CLK-1890-07",
+      "createdAt": "2026-06-17T10:22:49.431Z",
+      "createdBy": "user_system"
     }
-  ],
-  "healthScoreRules": []
+  ]
 }
