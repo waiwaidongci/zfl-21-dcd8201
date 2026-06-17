@@ -118,6 +118,169 @@ const AUDIT_RESOURCE_TYPES = {
   RETEST: "retest"
 };
 
+const WORKFLOW_STATUSES = {
+  CREATED: "created",
+  INITIAL_ADJUSTED: "initial_adjusted",
+  PENDING_RETEST: "pending_retest",
+  RETEST_FAILED: "retest_failed",
+  QUALIFIED: "qualified",
+  ARCHIVED: "archived"
+};
+
+const WORKFLOW_STATUS_LABELS = {
+  [WORKFLOW_STATUSES.CREATED]: "建档",
+  [WORKFLOW_STATUSES.INITIAL_ADJUSTED]: "初调",
+  [WORKFLOW_STATUSES.PENDING_RETEST]: "待复测",
+  [WORKFLOW_STATUSES.RETEST_FAILED]: "不合格待返工",
+  [WORKFLOW_STATUSES.QUALIFIED]: "已达标",
+  [WORKFLOW_STATUSES.ARCHIVED]: "达标归档"
+};
+
+const WORKFLOW_TRANSITIONS = {
+  [WORKFLOW_STATUSES.CREATED]: [WORKFLOW_STATUSES.INITIAL_ADJUSTED],
+  [WORKFLOW_STATUSES.INITIAL_ADJUSTED]: [WORKFLOW_STATUSES.PENDING_RETEST],
+  [WORKFLOW_STATUSES.PENDING_RETEST]: [WORKFLOW_STATUSES.RETEST_FAILED, WORKFLOW_STATUSES.QUALIFIED],
+  [WORKFLOW_STATUSES.RETEST_FAILED]: [WORKFLOW_STATUSES.PENDING_RETEST],
+  [WORKFLOW_STATUSES.QUALIFIED]: [WORKFLOW_STATUSES.ARCHIVED, WORKFLOW_STATUSES.PENDING_RETEST],
+  [WORKFLOW_STATUSES.ARCHIVED]: []
+};
+
+const WORKFLOW_OPERATIONS = {
+  INITIAL_ADJUST: "initial_adjust",
+  SUBMIT_RETEST: "submit_retest",
+  COMPLETE_RETEST: "complete_retest",
+  REWORK: "rework",
+  ARCHIVE: "archive"
+};
+
+function deriveWorkflowStatus(db, clockId) {
+  const clockAdjustments = db.adjustments
+    .filter((a) => a.clockId === clockId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const clockRetests = db.retests
+    .filter((r) => r.clockId === clockId)
+    .sort((a, b) => new Date(a.testedAt) - new Date(b.testedAt));
+
+  if (clockAdjustments.length === 0 && clockRetests.length === 0) {
+    return WORKFLOW_STATUSES.CREATED;
+  }
+
+  if (clockAdjustments.length > 0) {
+    const latestAdj = clockAdjustments[clockAdjustments.length - 1];
+
+    if (clockRetests.length === 0) {
+      if (latestAdj.workflowOperation === WORKFLOW_OPERATIONS.INITIAL_ADJUST) {
+        return WORKFLOW_STATUSES.INITIAL_ADJUSTED;
+      }
+      return WORKFLOW_STATUSES.PENDING_RETEST;
+    }
+
+    const latestRetest = clockRetests[clockRetests.length - 1];
+    const adjTime = new Date(latestAdj.createdAt);
+    const retestTime = new Date(latestRetest.testedAt);
+
+    if (adjTime > retestTime) {
+      return WORKFLOW_STATUSES.PENDING_RETEST;
+    }
+
+    if (latestRetest.qualified) {
+      const archivedFlag = db.clocks.find((c) => c.id === clockId)?.workflowArchived;
+      if (archivedFlag) {
+        return WORKFLOW_STATUSES.ARCHIVED;
+      }
+      return WORKFLOW_STATUSES.QUALIFIED;
+    } else {
+      return WORKFLOW_STATUSES.RETEST_FAILED;
+    }
+  }
+
+  return WORKFLOW_STATUSES.CREATED;
+}
+
+function canTransition(currentStatus, targetStatus) {
+  const allowed = WORKFLOW_TRANSITIONS[currentStatus] || [];
+  return allowed.includes(targetStatus);
+}
+
+function validateWorkflowTransition(currentStatus, operation) {
+  let targetStatus = null;
+  switch (operation) {
+    case WORKFLOW_OPERATIONS.INITIAL_ADJUST:
+      targetStatus = WORKFLOW_STATUSES.INITIAL_ADJUSTED;
+      break;
+    case WORKFLOW_OPERATIONS.SUBMIT_RETEST:
+      targetStatus = WORKFLOW_STATUSES.PENDING_RETEST;
+      break;
+    case WORKFLOW_OPERATIONS.REWORK:
+      targetStatus = WORKFLOW_STATUSES.PENDING_RETEST;
+      break;
+    case WORKFLOW_OPERATIONS.ARCHIVE:
+      targetStatus = WORKFLOW_STATUSES.ARCHIVED;
+      break;
+    default:
+      targetStatus = null;
+  }
+  if (targetStatus && !canTransition(currentStatus, targetStatus)) {
+    const error = new Error(
+      `当前状态【${WORKFLOW_STATUS_LABELS[currentStatus]}】不允许执行【${operation}】操作`
+    );
+    error.status = 400;
+    error.code = "INVALID_WORKFLOW_TRANSITION";
+    error.currentStatus = currentStatus;
+    error.operation = operation;
+    throw error;
+  }
+  return targetStatus;
+}
+
+function getWorkflowAllowedOperations(currentStatus) {
+  const allowed = [];
+  switch (currentStatus) {
+    case WORKFLOW_STATUSES.CREATED:
+      allowed.push(WORKFLOW_OPERATIONS.INITIAL_ADJUST);
+      break;
+    case WORKFLOW_STATUSES.INITIAL_ADJUSTED:
+      allowed.push(WORKFLOW_OPERATIONS.SUBMIT_RETEST);
+      break;
+    case WORKFLOW_STATUSES.PENDING_RETEST:
+      allowed.push(WORKFLOW_OPERATIONS.COMPLETE_RETEST);
+      break;
+    case WORKFLOW_STATUSES.RETEST_FAILED:
+      allowed.push(WORKFLOW_OPERATIONS.REWORK);
+      break;
+    case WORKFLOW_STATUSES.QUALIFIED:
+      allowed.push(WORKFLOW_OPERATIONS.ARCHIVE, WORKFLOW_OPERATIONS.SUBMIT_RETEST);
+      break;
+    case WORKFLOW_STATUSES.ARCHIVED:
+      break;
+  }
+  return allowed;
+}
+
+function buildWorkflowStatusInfo(db, clockId) {
+  const status = deriveWorkflowStatus(db, clockId);
+  const allowedOperations = getWorkflowAllowedOperations(status);
+  const adjustments = db.adjustments
+    .filter((a) => a.clockId === clockId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const retests = db.retests
+    .filter((r) => r.clockId === clockId)
+    .sort((a, b) => new Date(a.testedAt) - new Date(b.testedAt));
+
+  return {
+    clockId,
+    status,
+    statusLabel: WORKFLOW_STATUS_LABELS[status],
+    allowedOperations,
+    adjustmentCount: adjustments.length,
+    retestCount: retests.length,
+    latestAdjustment: adjustments.length > 0 ? adjustments[adjustments.length - 1] : null,
+    latestRetest: retests.length > 0 ? retests[retests.length - 1] : null,
+    transitions: WORKFLOW_TRANSITIONS,
+    statusLabels: WORKFLOW_STATUS_LABELS
+  };
+}
+
 const CLOCK_KEY_FIELDS = [
   "code",
   "escapementType",
@@ -129,6 +292,7 @@ const CLOCK_KEY_FIELDS = [
 const routes = [
   "GET /health",
   "GET /overview",
+  "GET /workflow/statuses",
   "GET /clocks",
   "POST /clocks",
   "PUT /clocks/:id",
@@ -139,6 +303,12 @@ const routes = [
   "GET /clocks/:id/audit-logs",
   "GET /audit-logs",
   "GET /clocks/:id/health-score",
+  "GET /clocks/:id/workflow-status",
+  "POST /clocks/:id/workflow/initial-adjust",
+  "POST /clocks/:id/workflow/submit-retest",
+  "POST /clocks/:id/workflow/complete-retest",
+  "POST /clocks/:id/workflow/rework",
+  "POST /clocks/:id/workflow/archive",
   "POST /clocks/:id/adjustments",
   "POST /clocks/:id/retests",
   "GET /clocks/:id/latest-retest",
@@ -1006,11 +1176,14 @@ function calculateHealthScore(db, clock) {
 function clockSummary(db, clock) {
   const retest = latestRetest(db, clock.id);
   const adjustment = latestAdjustment(db, clock.id);
+  const workflowStatus = deriveWorkflowStatus(db, clock.id);
   return {
     ...clock,
     latestAdjustment: adjustment,
     latestRetest: retest,
-    qualified: retest ? retest.qualified : false
+    qualified: retest ? retest.qualified : false,
+    workflowStatus,
+    workflowStatusLabel: WORKFLOW_STATUS_LABELS[workflowStatus]
   };
 }
 
@@ -1323,6 +1496,300 @@ async function handle(req, res) {
       operationTypes: AUDIT_OPERATION_TYPES,
       resourceTypes: AUDIT_RESOURCE_TYPES,
       keyFields: CLOCK_KEY_FIELDS
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/workflow/statuses") {
+    return send(res, 200, {
+      data: {
+        statuses: WORKFLOW_STATUSES,
+        statusLabels: WORKFLOW_STATUS_LABELS,
+        transitions: WORKFLOW_TRANSITIONS,
+        operations: WORKFLOW_OPERATIONS,
+        operationLabels: {
+          [WORKFLOW_OPERATIONS.INITIAL_ADJUST]: "初调",
+          [WORKFLOW_OPERATIONS.SUBMIT_RETEST]: "提交复测",
+          [WORKFLOW_OPERATIONS.COMPLETE_RETEST]: "完成复测",
+          [WORKFLOW_OPERATIONS.REWORK]: "返工调校",
+          [WORKFLOW_OPERATIONS.ARCHIVE]: "达标归档"
+        }
+      }
+    });
+  }
+
+  const workflowStatusMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow-status$/);
+  if (workflowStatusMatch && req.method === "GET") {
+    const clock = findClock(db, workflowStatusMatch[1]);
+    return send(res, 200, { data: buildWorkflowStatusInfo(db, clock.id) });
+  }
+
+  const workflowInitialAdjustMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/initial-adjust$/);
+  if (workflowInitialAdjustMatch && req.method === "POST") {
+    const clock = findClock(db, workflowInitialAdjustMatch[1]);
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.INITIAL_ADJUST);
+    const body = await parseBody(req);
+    required(body, ["currentDailyRateSeconds", "direction", "amount"]);
+    const adjustment = {
+      id: makeId("adjustment"),
+      clockId: clock.id,
+      currentDailyRateSeconds: Number(body.currentDailyRateSeconds),
+      direction: body.direction,
+      amount: body.amount,
+      note: body.note || "",
+      createdAt: new Date().toISOString(),
+      workflowOperation: WORKFLOW_OPERATIONS.INITIAL_ADJUST
+    };
+    db.adjustments.push(adjustment);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
+      resourceId: adjustment.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: adjustment.id,
+        currentDailyRateSeconds: adjustment.currentDailyRateSeconds,
+        direction: adjustment.direction,
+        amount: adjustment.amount,
+        note: adjustment.note
+      },
+      changedFields: null
+    });
+    await writeDb(db);
+    return send(res, 201, {
+      data: adjustment,
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowSubmitRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/submit-retest$/);
+  if (workflowSubmitRetestMatch && req.method === "POST") {
+    const clock = findClock(db, workflowSubmitRetestMatch[1]);
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.SUBMIT_RETEST);
+    const body = await parseBody(req);
+    required(body, ["currentDailyRateSeconds", "direction", "amount"]);
+    const adjustment = {
+      id: makeId("adjustment"),
+      clockId: clock.id,
+      currentDailyRateSeconds: Number(body.currentDailyRateSeconds),
+      direction: body.direction,
+      amount: body.amount,
+      note: body.note || "",
+      createdAt: new Date().toISOString(),
+      workflowOperation: currentStatus === WORKFLOW_STATUSES.RETEST_FAILED
+        ? WORKFLOW_OPERATIONS.REWORK
+        : WORKFLOW_OPERATIONS.SUBMIT_RETEST
+    };
+    db.adjustments.push(adjustment);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
+      resourceId: adjustment.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: adjustment.id,
+        currentDailyRateSeconds: adjustment.currentDailyRateSeconds,
+        direction: adjustment.direction,
+        amount: adjustment.amount,
+        note: adjustment.note
+      },
+      changedFields: null
+    });
+    if (body.plannedRetestAt && body.priority) {
+      const task = {
+        id: makeId("retestTask"),
+        clockId: clock.id,
+        adjustmentId: adjustment.id,
+        plannedRetestAt: body.plannedRetestAt,
+        priority: body.priority,
+        status: "pending",
+        completedAt: null,
+        completedRetestId: null,
+        note: body.retestTaskNote || "",
+        createdAt: new Date().toISOString()
+      };
+      if (!db.retestTasks) db.retestTasks = [];
+      db.retestTasks.push(task);
+    }
+    await writeDb(db);
+    return send(res, 201, {
+      data: adjustment,
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowCompleteRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/complete-retest$/);
+  if (workflowCompleteRetestMatch && req.method === "POST") {
+    const clock = findClock(db, workflowCompleteRetestMatch[1]);
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    if (currentStatus !== WORKFLOW_STATUSES.PENDING_RETEST) {
+      const error = new Error(
+        `当前状态【${WORKFLOW_STATUS_LABELS[currentStatus]}】不允许完成复测，需先进入待复测状态`
+      );
+      error.status = 400;
+      error.code = "INVALID_WORKFLOW_TRANSITION";
+      error.currentStatus = currentStatus;
+      throw error;
+    }
+    const body = await parseBody(req);
+    required(body, ["dailyRateSeconds", "amplitude"]);
+
+    let targetTask = null;
+    if (body.retestTaskId && db.retestTasks) {
+      targetTask = db.retestTasks.find(
+        (t) => t.id === body.retestTaskId && t.clockId === clock.id && t.status === "pending"
+      );
+      if (!targetTask) {
+        const error = new Error("指定的复测任务不存在或已完成");
+        error.status = 404;
+        throw error;
+      }
+    }
+
+    const adjustmentId = targetTask?.adjustmentId || body.adjustmentId || latestAdjustment(db, clock.id)?.id || null;
+    const qualified = body.qualified !== undefined
+      ? Boolean(body.qualified)
+      : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
+
+    const retest = {
+      id: makeId("retest"),
+      clockId: clock.id,
+      adjustmentId,
+      testedAt: body.testedAt || new Date().toISOString(),
+      dailyRateSeconds: Number(body.dailyRateSeconds),
+      amplitude: Number(body.amplitude),
+      qualified,
+      note: body.note || "",
+      workflowOperation: WORKFLOW_OPERATIONS.COMPLETE_RETEST
+    };
+    db.retests.push(retest);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.RETEST,
+      resourceId: retest.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: retest.id,
+        adjustmentId: retest.adjustmentId,
+        testedAt: retest.testedAt,
+        dailyRateSeconds: retest.dailyRateSeconds,
+        amplitude: retest.amplitude,
+        qualified: retest.qualified,
+        note: retest.note
+      },
+      changedFields: null
+    });
+    if (db.retestTasks) {
+      let matchingTask = targetTask;
+      if (!matchingTask) {
+        const pendingTasks = db.retestTasks.filter(
+          (t) => t.clockId === clock.id && t.status === "pending"
+        );
+        if (adjustmentId) {
+          const sameAdjustmentTasks = pendingTasks.filter((t) => t.adjustmentId === adjustmentId);
+          if (sameAdjustmentTasks.length > 0) {
+            matchingTask = sameAdjustmentTasks.sort(
+              (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+            )[0];
+          }
+        } else if (pendingTasks.length > 0) {
+          matchingTask = pendingTasks.sort(
+            (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+          )[0];
+        }
+      }
+      if (matchingTask) {
+        matchingTask.status = "completed";
+        matchingTask.completedAt = new Date().toISOString();
+        matchingTask.completedRetestId = retest.id;
+      }
+    }
+    await writeDb(db);
+    return send(res, 201, {
+      data: retest,
+      clock: clockSummary(db, clock),
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowReworkMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/rework$/);
+  if (workflowReworkMatch && req.method === "POST") {
+    const clock = findClock(db, workflowReworkMatch[1]);
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.REWORK);
+    const body = await parseBody(req);
+    required(body, ["currentDailyRateSeconds", "direction", "amount"]);
+    const adjustment = {
+      id: makeId("adjustment"),
+      clockId: clock.id,
+      currentDailyRateSeconds: Number(body.currentDailyRateSeconds),
+      direction: body.direction,
+      amount: body.amount,
+      note: body.note || "",
+      createdAt: new Date().toISOString(),
+      workflowOperation: WORKFLOW_OPERATIONS.REWORK
+    };
+    db.adjustments.push(adjustment);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
+      resourceId: adjustment.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: adjustment.id,
+        currentDailyRateSeconds: adjustment.currentDailyRateSeconds,
+        direction: adjustment.direction,
+        amount: adjustment.amount,
+        note: adjustment.note
+      },
+      changedFields: null
+    });
+    if (body.plannedRetestAt && body.priority) {
+      const task = {
+        id: makeId("retestTask"),
+        clockId: clock.id,
+        adjustmentId: adjustment.id,
+        plannedRetestAt: body.plannedRetestAt,
+        priority: body.priority,
+        status: "pending",
+        completedAt: null,
+        completedRetestId: null,
+        note: body.retestTaskNote || "",
+        createdAt: new Date().toISOString()
+      };
+      if (!db.retestTasks) db.retestTasks = [];
+      db.retestTasks.push(task);
+    }
+    await writeDb(db);
+    return send(res, 201, {
+      data: adjustment,
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
+  }
+
+  const workflowArchiveMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/archive$/);
+  if (workflowArchiveMatch && req.method === "POST") {
+    const clock = findClock(db, workflowArchiveMatch[1]);
+    const currentStatus = deriveWorkflowStatus(db, clock.id);
+    validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.ARCHIVE);
+    const body = await parseBody(req);
+    clock.workflowArchived = true;
+    clock.workflowArchivedAt = new Date().toISOString();
+    clock.workflowArchiveNote = body.note || "";
+    await writeDb(db);
+    return send(res, 200, {
+      data: {
+        archived: true,
+        clockId: clock.id,
+        archivedAt: clock.workflowArchivedAt,
+        note: clock.workflowArchiveNote
+      },
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
     });
   }
 
