@@ -162,14 +162,31 @@ const AUDIT_OPERATION_TYPES = {
   ADJUSTMENT_CREATE: "adjustment_create",
   RETEST_CREATE: "retest_create",
   HANDOVER_CREATE: "handover_create",
-  TECHNICIAN_ASSIGN: "technician_assign"
+  TECHNICIAN_ASSIGN: "technician_assign",
+  SUGGESTION_CREATE: "suggestion_create",
+  SUGGESTION_STATUS_UPDATE: "suggestion_status_update"
 };
 
 const AUDIT_RESOURCE_TYPES = {
   CLOCK: "clock",
   ADJUSTMENT: "adjustment",
   RETEST: "retest",
-  HANDOVER: "handover"
+  HANDOVER: "handover",
+  SUGGESTION: "suggestion"
+};
+
+const SUGGESTION_STATUSES = {
+  PENDING: "pending",
+  ACCEPTED: "accepted",
+  IGNORED: "ignored",
+  APPLIED: "applied"
+};
+
+const SUGGESTION_STATUS_LABELS = {
+  [SUGGESTION_STATUSES.PENDING]: "待处理",
+  [SUGGESTION_STATUSES.ACCEPTED]: "已采纳",
+  [SUGGESTION_STATUSES.IGNORED]: "已忽略",
+  [SUGGESTION_STATUSES.APPLIED]: "已应用"
 };
 
 const WORKFLOW_STATUSES = {
@@ -382,6 +399,7 @@ const routes = [
   "GET /clocks/health-scores",
   "GET /suggestions",
   "GET /suggestions/:id",
+  "PATCH /suggestions/:id/status",
   "GET /adjustments",
   "GET /retests",
   "GET /retest-tasks",
@@ -1214,6 +1232,12 @@ function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSna
       return `交接记录：${afterSnapshot?.receiverName || afterSnapshot?.receiver || ""} 接手，备注：${afterSnapshot?.handoverNote || "无"}`;
     case AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN:
       return `负责人变更：${beforeSnapshot?.technicianName || "无"} → ${afterSnapshot?.technicianName || "无"}`;
+    case AUDIT_OPERATION_TYPES.SUGGESTION_CREATE:
+      return `创建调校建议，${afterSnapshot?.deviationDescription || ""}，建议：${afterSnapshot?.conservativeAmount || ""}`;
+    case AUDIT_OPERATION_TYPES.SUGGESTION_STATUS_UPDATE:
+      const beforeStatus = beforeSnapshot?.status ? SUGGESTION_STATUS_LABELS[beforeSnapshot.status] || beforeSnapshot.status : "待处理";
+      const afterStatus = afterSnapshot?.status ? SUGGESTION_STATUS_LABELS[afterSnapshot.status] || afterSnapshot.status : "";
+      return `建议状态变更：${beforeStatus} → ${afterStatus}`;
     default:
       return `${operationType} ${resourceType}`;
   }
@@ -1772,11 +1796,12 @@ async function ensureDb() {
   const needsMigration2 = migrateDbAddRetestTaskCancelFields(dbData);
   const needsMigration3 = migrateDbAddHandoverFields(dbData);
   const needsMigration4 = migrateDbAddHealthScoreRules(dbData);
+  const needsMigration5 = migrateDbAddSuggestionStatusFields(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || needsMigration5 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
 }
@@ -1788,6 +1813,65 @@ function migrateDbAddHealthScoreRules(dbData) {
     changed = true;
   }
   return changed;
+}
+
+function migrateDbAddSuggestionStatusFields(dbData) {
+  let changed = false;
+  if (dbData.suggestions) {
+    for (const item of dbData.suggestions) {
+      if (!item.status) {
+        item.status = SUGGESTION_STATUSES.PENDING;
+        changed = true;
+      }
+      if (!item.processedBy) {
+        item.processedBy = null;
+        changed = true;
+      }
+      if (!item.processedAt) {
+        item.processedAt = null;
+        changed = true;
+      }
+      if (!item.appliedAdjustmentId) {
+        item.appliedAdjustmentId = null;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+function findPendingSuggestionsByClockId(db, clockId) {
+  return (db.suggestions || []).filter(
+    (s) => s.clockId === clockId && s.status === SUGGESTION_STATUSES.PENDING
+  );
+}
+
+function enrichWithProcessor(db, item) {
+  if (!item) return item;
+  const processor = item.processedBy ? db.users.find((u) => u.id === item.processedBy) || null : null;
+  const appliedAdjustment = item.appliedAdjustmentId
+    ? db.adjustments.find((a) => a.id === item.appliedAdjustmentId) || null
+    : null;
+  return {
+    ...item,
+    processor: processor ? { id: processor.id, name: processor.name, role: processor.role } : null,
+    statusLabel: SUGGESTION_STATUS_LABELS[item.status] || item.status,
+    appliedAdjustment
+  };
+}
+
+function enrichSuggestion(db, suggestion) {
+  if (!suggestion) return suggestion;
+  const referenceRetest = db.retests.find((r) => r.id === suggestion.referenceRetestId) || null;
+  const referenceAdjustment = db.adjustments.find((a) => a.id === suggestion.referenceAdjustmentId) || null;
+  return enrichWithProcessor(
+    db,
+    enrichWithCreator(db, {
+      ...suggestion,
+      referenceRetest,
+      referenceAdjustment
+    })
+  );
 }
 
 function getCurrentUser(req, db) {
@@ -3646,8 +3730,18 @@ async function handle(req, res) {
       error.code = "FORBIDDEN";
       throw error;
     }
+    const pendingSuggestions = findPendingSuggestionsByClockId(db, clock.id);
     const suggestion = generateAdjustmentSuggestion(db, clock);
-    return send(res, 200, { data: suggestion });
+    const response = { data: suggestion };
+    if (pendingSuggestions.length > 0) {
+      response.warning = {
+        code: "PENDING_SUGGESTIONS_EXIST",
+        message: `该钟表存在 ${pendingSuggestions.length} 条未处理的调校建议，仍可继续生成预览`,
+        pendingSuggestionCount: pendingSuggestions.length,
+        pendingSuggestionIds: pendingSuggestions.map((s) => s.id)
+      };
+    }
+    return send(res, 200, response);
   }
 
   const saveSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
@@ -3662,6 +3756,7 @@ async function handle(req, res) {
     }
     const body = await parseBody(req);
     const suggestion = generateAdjustmentSuggestion(db, clock);
+    const pendingSuggestions = findPendingSuggestionsByClockId(db, clock.id);
     const savedSuggestion = {
       id: makeId("suggestion"),
       clockId: clock.id,
@@ -3676,12 +3771,39 @@ async function handle(req, res) {
       referenceRetestId: suggestion.referenceRetestId,
       referenceAdjustmentId: suggestion.referenceAdjustmentId,
       note: body.note || "",
+      status: SUGGESTION_STATUSES.PENDING,
+      processedBy: null,
+      processedAt: null,
+      appliedAdjustmentId: null,
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id
     };
     db.suggestions.push(savedSuggestion);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.SUGGESTION_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.SUGGESTION,
+      resourceId: savedSuggestion.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        deviationDescription: savedSuggestion.deviationDescription,
+        conservativeAmount: savedSuggestion.conservativeAmount,
+        status: savedSuggestion.status
+      },
+      changedFields: null,
+      createdBy: currentUser.id
+    });
     await writeDb(db);
-    return send(res, 201, { data: enrichWithCreator(db, savedSuggestion) });
+    const response = { data: enrichSuggestion(db, savedSuggestion) };
+    if (pendingSuggestions.length > 0) {
+      response.warning = {
+        code: "PENDING_SUGGESTIONS_EXIST",
+        message: `该钟表已存在 ${pendingSuggestions.length} 条未处理的调校建议`,
+        pendingSuggestionCount: pendingSuggestions.length,
+        pendingSuggestionIds: pendingSuggestions.map((s) => s.id)
+      };
+    }
+    return send(res, 201, response);
   }
 
   const listSuggestionsMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
@@ -3694,11 +3816,7 @@ async function handle(req, res) {
       error.code = "FORBIDDEN";
       throw error;
     }
-    const data = listSuggestions(db, clock.id).map((s) => enrichWithCreator(db, {
-      ...s,
-      referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
-      referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
-    }));
+    const data = listSuggestions(db, clock.id).map((s) => enrichSuggestion(db, s));
     return send(res, 200, { data, total: data.length });
   }
 
@@ -3710,12 +3828,82 @@ async function handle(req, res) {
       const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
       data = data.filter((item) => accessibleClockIds.has(item.clockId));
     }
-    data = data.map((s) => enrichWithCreator(db, {
-      ...s,
-      referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
-      referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
-    }));
-    return send(res, 200, { data, total: data.length });
+    data = data.map((s) => enrichSuggestion(db, s));
+    return send(res, 200, { data, total: data.length, statuses: SUGGESTION_STATUSES, statusLabels: SUGGESTION_STATUS_LABELS });
+  }
+
+  const suggestionStatusUpdateMatch = pathname.match(/^\/suggestions\/([^/]+)\/status$/);
+  if (suggestionStatusUpdateMatch && req.method === "PATCH") {
+    requireAuth(req, db);
+    const suggestion = findSuggestion(db, suggestionStatusUpdateMatch[1]);
+    const clock = db.clocks.find((c) => c.id === suggestion.clockId) || null;
+    if (clock && !canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该建议记录");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const body = await parseBody(req);
+    const validStatuses = Object.values(SUGGESTION_STATUSES);
+    if (!body.status || !validStatuses.includes(body.status)) {
+      const error = new Error(`状态必须是 ${validStatuses.join("/")}`);
+      error.status = 400;
+      error.code = "INVALID_STATUS";
+      throw error;
+    }
+    if (body.status === SUGGESTION_STATUSES.APPLIED && !body.appliedAdjustmentId) {
+      const error = new Error("标记为已应用时必须关联调校记录");
+      error.status = 400;
+      error.code = "APPLIED_ADJUSTMENT_REQUIRED";
+      throw error;
+    }
+    if (body.appliedAdjustmentId) {
+      const adjustment = db.adjustments.find((a) => a.id === body.appliedAdjustmentId);
+      if (!adjustment) {
+        const error = new Error("关联的调校记录不存在");
+        error.status = 400;
+        error.code = "ADJUSTMENT_NOT_FOUND";
+        throw error;
+      }
+      if (adjustment.clockId !== suggestion.clockId) {
+        const error = new Error("关联的调校记录不属于同一钟表");
+        error.status = 400;
+        error.code = "ADJUSTMENT_CLOCK_MISMATCH";
+        throw error;
+      }
+    }
+    const beforeSnapshot = {
+      status: suggestion.status,
+      processedBy: suggestion.processedBy,
+      processedAt: suggestion.processedAt,
+      appliedAdjustmentId: suggestion.appliedAdjustmentId
+    };
+    suggestion.status = body.status;
+    suggestion.processedBy = currentUser.id;
+    suggestion.processedAt = new Date().toISOString();
+    suggestion.appliedAdjustmentId = body.status === SUGGESTION_STATUSES.APPLIED ? body.appliedAdjustmentId : null;
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.SUGGESTION_STATUS_UPDATE,
+      resourceType: AUDIT_RESOURCE_TYPES.SUGGESTION,
+      resourceId: suggestion.id,
+      clockId: suggestion.clockId,
+      beforeSnapshot,
+      afterSnapshot: {
+        status: suggestion.status,
+        processedBy: suggestion.processedBy,
+        processedAt: suggestion.processedAt,
+        appliedAdjustmentId: suggestion.appliedAdjustmentId
+      },
+      changedFields: summarizeFieldChanges(beforeSnapshot, {
+        status: suggestion.status,
+        processedBy: suggestion.processedBy,
+        processedAt: suggestion.processedAt,
+        appliedAdjustmentId: suggestion.appliedAdjustmentId
+      }, ["status", "processedBy", "processedAt", "appliedAdjustmentId"]),
+      createdBy: currentUser.id
+    });
+    await writeDb(db);
+    return send(res, 200, { data: enrichSuggestion(db, suggestion) });
   }
 
   const suggestionDetailMatch = pathname.match(/^\/suggestions\/([^/]+)$/);
@@ -3729,15 +3917,8 @@ async function handle(req, res) {
       error.code = "FORBIDDEN";
       throw error;
     }
-    const referenceRetest = db.retests.find((r) => r.id === suggestion.referenceRetestId) || null;
-    const referenceAdjustment = db.adjustments.find((a) => a.id === suggestion.referenceAdjustmentId) || null;
     return send(res, 200, {
-      data: enrichWithCreator(db, {
-        ...suggestion,
-        clock,
-        referenceRetest,
-        referenceAdjustment
-      })
+      data: enrichSuggestion(db, { ...suggestion, clock })
     });
   }
 

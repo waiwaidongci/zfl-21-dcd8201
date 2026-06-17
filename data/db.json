@@ -234,6 +234,10 @@
       "referenceRetestId": "retest_demo",
       "referenceAdjustmentId": "adjustment_demo",
       "note": "初次生成建议，保存备案",
+      "status": "pending",
+      "processedBy": null,
+      "processedAt": null,
+      "appliedAdjustmentId": null,
       "createdAt": "2026-06-16T16:19:35.505Z",
       "createdBy": "user_system"
     }
@@ -330,6 +334,250 @@
       "summary": "交接记录：王师傅 接手，备注：张师傅完成初步调校，建议接手人复测游丝",
       "createdAt": "2026-06-17T06:27:31.738Z",
       "createdBy": "user_tech_zhang"
+    },
+    {
+      "id": "audit_mqhvvemd_ivokmq",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "pending",
+        "processedBy": null,
+        "processedAt": null,
+        "appliedAdjustmentId": null
+      },
+      "afterSnapshot": {
+        "status": "accepted",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:43:29.221Z",
+        "appliedAdjustmentId": null
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "pending",
+          "after": "accepted"
+        },
+        {
+          "field": "processedBy",
+          "before": null,
+          "after": "user_admin_default"
+        },
+        {
+          "field": "processedAt",
+          "before": null,
+          "after": "2026-06-17T09:43:29.221Z"
+        }
+      ],
+      "summary": "建议状态变更：待处理 → 已采纳",
+      "createdAt": "2026-06-17T09:43:29.221Z",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqhvvyuh_3n5uaf",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "accepted",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:43:29.221Z",
+        "appliedAdjustmentId": null
+      },
+      "afterSnapshot": {
+        "status": "pending",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:43:55.433Z",
+        "appliedAdjustmentId": null
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "accepted",
+          "after": "pending"
+        },
+        {
+          "field": "processedAt",
+          "before": "2026-06-17T09:43:29.221Z",
+          "after": "2026-06-17T09:43:55.433Z"
+        }
+      ],
+      "summary": "建议状态变更：已采纳 → 待处理",
+      "createdAt": "2026-06-17T09:43:55.433Z",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqhvxgci_3d1sg4",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "pending",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:43:55.433Z",
+        "appliedAdjustmentId": null
+      },
+      "afterSnapshot": {
+        "status": "ignored",
+        "processedBy": "user_tech_wang",
+        "processedAt": "2026-06-17T09:45:04.770Z",
+        "appliedAdjustmentId": null
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "pending",
+          "after": "ignored"
+        },
+        {
+          "field": "processedBy",
+          "before": "user_admin_default",
+          "after": "user_tech_wang"
+        },
+        {
+          "field": "processedAt",
+          "before": "2026-06-17T09:43:55.433Z",
+          "after": "2026-06-17T09:45:04.770Z"
+        }
+      ],
+      "summary": "建议状态变更：待处理 → 已忽略",
+      "createdAt": "2026-06-17T09:45:04.770Z",
+      "createdBy": "user_tech_wang"
+    },
+    {
+      "id": "audit_mqhvxhc0_pzw25s",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "ignored",
+        "processedBy": "user_tech_wang",
+        "processedAt": "2026-06-17T09:45:04.770Z",
+        "appliedAdjustmentId": null
+      },
+      "afterSnapshot": {
+        "status": "applied",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:45:06.048Z",
+        "appliedAdjustmentId": "adjustment_demo"
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "ignored",
+          "after": "applied"
+        },
+        {
+          "field": "processedBy",
+          "before": "user_tech_wang",
+          "after": "user_admin_default"
+        },
+        {
+          "field": "processedAt",
+          "before": "2026-06-17T09:45:04.770Z",
+          "after": "2026-06-17T09:45:06.048Z"
+        },
+        {
+          "field": "appliedAdjustmentId",
+          "before": null,
+          "after": "adjustment_demo"
+        }
+      ],
+      "summary": "建议状态变更：已忽略 → 已应用",
+      "createdAt": "2026-06-17T09:45:06.048Z",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqhvya2q_b3pl8t",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "applied",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:45:06.048Z",
+        "appliedAdjustmentId": "adjustment_demo"
+      },
+      "afterSnapshot": {
+        "status": "ignored",
+        "processedBy": "user_tech_wang",
+        "processedAt": "2026-06-17T09:45:43.297Z",
+        "appliedAdjustmentId": null
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "applied",
+          "after": "ignored"
+        },
+        {
+          "field": "processedBy",
+          "before": "user_admin_default",
+          "after": "user_tech_wang"
+        },
+        {
+          "field": "processedAt",
+          "before": "2026-06-17T09:45:06.048Z",
+          "after": "2026-06-17T09:45:43.297Z"
+        },
+        {
+          "field": "appliedAdjustmentId",
+          "before": "adjustment_demo",
+          "after": null
+        }
+      ],
+      "summary": "建议状态变更：已应用 → 已忽略",
+      "createdAt": "2026-06-17T09:45:43.298Z",
+      "createdBy": "user_tech_wang"
+    },
+    {
+      "id": "audit_mqhvyftb_st6i4e",
+      "operationType": "suggestion_status_update",
+      "resourceType": "suggestion",
+      "resourceId": "suggestion_mqguky4x_jyo4u2",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "status": "ignored",
+        "processedBy": "user_tech_wang",
+        "processedAt": "2026-06-17T09:45:43.297Z",
+        "appliedAdjustmentId": null
+      },
+      "afterSnapshot": {
+        "status": "applied",
+        "processedBy": "user_admin_default",
+        "processedAt": "2026-06-17T09:45:50.735Z",
+        "appliedAdjustmentId": "adjustment_demo"
+      },
+      "changedFields": [
+        {
+          "field": "status",
+          "before": "ignored",
+          "after": "applied"
+        },
+        {
+          "field": "processedBy",
+          "before": "user_tech_wang",
+          "after": "user_admin_default"
+        },
+        {
+          "field": "processedAt",
+          "before": "2026-06-17T09:45:43.297Z",
+          "after": "2026-06-17T09:45:50.735Z"
+        },
+        {
+          "field": "appliedAdjustmentId",
+          "before": null,
+          "after": "adjustment_demo"
+        }
+      ],
+      "summary": "建议状态变更：已忽略 → 已应用",
+      "createdAt": "2026-06-17T09:45:50.735Z",
+      "createdBy": "user_admin_default"
     }
   ],
   "healthScoreRules": []
