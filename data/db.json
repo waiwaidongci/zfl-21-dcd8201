@@ -21,7 +21,7 @@
       "note": "爱德华时期座钟",
       "createdAt": "2026-06-16T15:16:37.327Z",
       "createdBy": "user_system",
-      "assignedTechnicianId": null
+      "assignedTechnicianId": "user_admin_default"
     },
     {
       "id": "clock_mqgsbyvj_cr3o4k",
@@ -32,7 +32,7 @@
       "note": "",
       "createdAt": "2026-06-16T15:16:37.327Z",
       "createdBy": "user_system",
-      "assignedTechnicianId": null
+      "assignedTechnicianId": "user_admin_default"
     },
     {
       "id": "clock_mqhj1o36_jfapkz",
@@ -41,7 +41,7 @@
       "balanceFrequency": "21600vph",
       "targetDailyRateSeconds": 30,
       "note": "",
-      "assignedTechnicianId": null,
+      "assignedTechnicianId": "user_admin_default",
       "createdAt": "2026-06-17T03:44:26.418Z",
       "createdBy": "user_system"
     }

@@ -1324,8 +1324,8 @@ function migrateDbAddCreatedBy(db) {
         clock.createdBy = DEFAULT_SYSTEM_USER_ID;
         changed = true;
       }
-      if (clock.assignedTechnicianId === undefined) {
-        clock.assignedTechnicianId = null;
+      if (!clock.assignedTechnicianId) {
+        clock.assignedTechnicianId = DEFAULT_ADMIN_USER_ID;
         changed = true;
       }
     }
@@ -1393,13 +1393,7 @@ async function ensureDb() {
   const needsMigration = migrateDbAddCreatedBy(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
-    if (dbData.clocks) {
-      for (const clock of dbData.clocks) {
-        if (!clock.assignedTechnicianId) {
-          clock.assignedTechnicianId = null;
-        }
-      }
-    }
+    migrateDbAddCreatedBy(dbData);
   }
   if (needsMigration || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
@@ -1669,14 +1663,8 @@ async function handle(req, res) {
 
   const clockUpdateMatch = pathname.match(/^\/clocks\/([^/]+)$/);
   if (clockUpdateMatch && req.method === "PUT") {
-    requireAuth(req, db);
+    requireAdmin(req, db);
     const clock = findClock(db, clockUpdateMatch[1]);
-    if (!canAccessClock(clock, currentUser)) {
-      const error = new Error("无权限访问该钟表档案");
-      error.status = 403;
-      error.code = "FORBIDDEN";
-      throw error;
-    }
     const body = await parseBody(req);
 
     const beforeKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
@@ -2471,14 +2459,8 @@ async function handle(req, res) {
 
   const handoverCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverCreateMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requireAdmin(req, db);
     const clock = findClock(db, handoverCreateMatch[1]);
-    if (!canAccessClock(clock, currentUser)) {
-      const error = new Error("无权限操作该钟表档案");
-      error.status = 403;
-      error.code = "FORBIDDEN";
-      throw error;
-    }
     const body = await parseBody(req);
     required(body, ["handoverNote", "receiver"]);
     const handover = {
