@@ -885,6 +885,54 @@ function listHandovers(db, clockId) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
+function compactUser(user, fallbackName = "") {
+  if (user) return { id: user.id, name: user.name, role: user.role };
+  if (fallbackName) return { id: null, name: fallbackName, role: null };
+  return null;
+}
+
+function listResolvedHandovers(db, clockId) {
+  const clock = db.clocks.find((c) => c.id === clockId) || null;
+  const initialOwnerId = clock ? (clock.createdBy || clock.assignedTechnicianId || null) : null;
+  let previousId = initialOwnerId;
+  let previousName = "";
+  if (previousId) {
+    const initialUser = db.users.find((u) => u.id === previousId) || null;
+    previousName = initialUser ? initialUser.name : "";
+  }
+
+  return db.handovers
+    .filter((item) => item.clockId === clockId)
+    .slice()
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .map((handover) => {
+      const receiverUser = handover.receiverId ? db.users.find((u) => u.id === handover.receiverId) || null : null;
+      const receiverName = receiverUser?.name || handover.receiver || "";
+      const currentPreviousId = handover.previousTechnicianId || previousId || null;
+      const previousUser = currentPreviousId ? db.users.find((u) => u.id === currentPreviousId) || null : null;
+      const currentPreviousName = previousUser?.name || previousName || handover.previousTechnicianName || "（初始）";
+      const enriched = enrichWithCreator(db, {
+        ...handover,
+        receiver: receiverName,
+        receiverId: handover.receiverId || null,
+        previousTechnicianId: currentPreviousId,
+        previousTechnicianName: currentPreviousName
+      });
+
+      enriched.receiverUser = compactUser(receiverUser, receiverName);
+      enriched.previousTechnicianUser = currentPreviousName === "（初始）"
+        ? null
+        : compactUser(previousUser, currentPreviousName);
+
+      if (handover.receiverId) {
+        previousId = handover.receiverId;
+        previousName = receiverName;
+      }
+      return enriched;
+    })
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
 function parseAdjustmentAmount(amount) {
   if (!amount) return null;
   const match = amount.match(/([\d.]+)\s*格/);
@@ -2311,18 +2359,7 @@ async function handle(req, res) {
     }
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id).map((a) => enrichWithCreator(db, a));
     const retests = db.retests.filter((item) => item.clockId === clock.id).map((r) => enrichWithCreator(db, r));
-    const handovers = listHandovers(db, clock.id).map((h) => {
-      const enriched = enrichWithCreator(db, h);
-      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
-      if (receiverUser) {
-        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
-      }
-      const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
-      if (previousUser) {
-        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
-      }
-      return enriched;
-    });
+    const handovers = listResolvedHandovers(db, clock.id);
     const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id).map((t) => enrichRetestTask(db, t));
 
     const assignAuditLogs = (db.auditLogs || [])
@@ -2945,52 +2982,7 @@ async function handle(req, res) {
         throw error;
       }
     }
-    const allClockHandovers = listHandovers(db, clock.id).slice().reverse();
-
-    const initialOwnerId = clock.createdBy || clock.assignedTechnicianId || null;
-    const initialOwnerUser = initialOwnerId ? db.users.find((u) => u.id === initialOwnerId) : null;
-    let prevTechId = initialOwnerId;
-    let prevTechName = initialOwnerUser ? initialOwnerUser.name : (initialOwnerId ? "" : "");
-
-    for (const h of allClockHandovers) {
-      const resolvedPrevId = h.previousTechnicianId;
-      const resolvedPrevUser = resolvedPrevId ? db.users.find((u) => u.id === resolvedPrevId) : null;
-      h._resolvedPreviousTechnicianId = resolvedPrevId || prevTechId;
-      h._resolvedPreviousTechnicianName = resolvedPrevUser?.name || h.previousTechnicianName || prevTechName || "（初始）";
-      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
-      h._resolvedReceiverId = h.receiverId || null;
-      h._resolvedReceiverName = receiverUser?.name || h.receiver || "";
-      if (h._resolvedReceiverId) {
-        prevTechId = h._resolvedReceiverId;
-        prevTechName = h._resolvedReceiverName;
-      }
-    }
-
-    const data = allClockHandovers
-      .slice()
-      .reverse()
-      .map((h) => {
-        const enriched = enrichWithCreator(db, h);
-        const receiverUser = h._resolvedReceiverId ? db.users.find((u) => u.id === h._resolvedReceiverId) : null;
-        if (receiverUser) {
-          enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
-        } else if (h._resolvedReceiverName) {
-          enriched.receiverUser = { id: null, name: h._resolvedReceiverName, role: null };
-        }
-        const previousUser = h._resolvedPreviousTechnicianId ? db.users.find((u) => u.id === h._resolvedPreviousTechnicianId) : null;
-        enriched.previousTechnicianId = h._resolvedPreviousTechnicianId;
-        enriched.previousTechnicianName = h._resolvedPreviousTechnicianName;
-        if (previousUser) {
-          enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
-        } else if (h._resolvedPreviousTechnicianName && h._resolvedPreviousTechnicianName !== "（初始）") {
-          enriched.previousTechnicianUser = { id: null, name: h._resolvedPreviousTechnicianName, role: null };
-        }
-        delete enriched._resolvedPreviousTechnicianId;
-        delete enriched._resolvedPreviousTechnicianName;
-        delete enriched._resolvedReceiverId;
-        delete enriched._resolvedReceiverName;
-        return enriched;
-      });
+    const data = listResolvedHandovers(db, clock.id);
     return send(res, 200, { data, total: data.length });
   }
 
@@ -3110,51 +3102,10 @@ async function handle(req, res) {
       }
     }
 
-    const allClockHandovers = db.handovers
-      .filter((h) => h.clockId === clock.id)
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-    const initialOwnerId = clock.createdBy || clock.assignedTechnicianId || null;
-    const initialOwnerUser = initialOwnerId ? db.users.find((u) => u.id === initialOwnerId) : null;
-    let prevTechId = initialOwnerId;
-    let prevTechName = initialOwnerUser ? initialOwnerUser.name : (initialOwnerId ? "" : "");
-
-    for (const h of allClockHandovers) {
-      const resolvedPrevId = h.previousTechnicianId;
-      const resolvedPrevUser = resolvedPrevId ? db.users.find((u) => u.id === resolvedPrevId) : null;
-      const computedPrevName = resolvedPrevUser ? resolvedPrevUser.name : (h.previousTechnicianName || (prevTechName || ""));
-
-      if (resolvedPrevId) {
-        h._resolvedPreviousTechnicianId = resolvedPrevId;
-        h._resolvedPreviousTechnicianName = computedPrevName;
-      } else {
-        h._resolvedPreviousTechnicianId = prevTechId;
-        h._resolvedPreviousTechnicianName = prevTechName;
-      }
-
-      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
-      if (receiverUser) {
-        h._resolvedReceiverId = receiverUser.id;
-        h._resolvedReceiverName = receiverUser.name;
-      } else {
-        h._resolvedReceiverId = h.receiverId || null;
-        h._resolvedReceiverName = h.receiver || "";
-      }
-
-      if (h._resolvedReceiverId) {
-        prevTechId = h._resolvedReceiverId;
-        prevTechName = h._resolvedReceiverName;
-      }
-    }
-
-    const handoverEvents = allClockHandovers
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    const handoverEvents = listResolvedHandovers(db, clock.id)
       .map((h) => {
-        const creator = db.users.find((u) => u.id === h.createdBy) || null;
-        const receiverUser = h._resolvedReceiverId ? db.users.find((u) => u.id === h._resolvedReceiverId) : null;
-        const previousUser = h._resolvedPreviousTechnicianId ? db.users.find((u) => u.id === h._resolvedPreviousTechnicianId) : null;
-        const prevNameDisplay = h._resolvedPreviousTechnicianName || previousUser?.name || "（初始）";
-        const receiverNameDisplay = h._resolvedReceiverName || receiverUser?.name || h.receiver || "无";
+        const prevNameDisplay = h.previousTechnicianName || "（初始）";
+        const receiverNameDisplay = h.receiver || "无";
         return {
           id: h.id,
           type: "handover",
@@ -3164,12 +3115,12 @@ async function handle(req, res) {
             handoverNote: h.handoverNote,
             nextStepSuggestion: h.nextStepSuggestion,
             receiver: receiverNameDisplay,
-            receiverId: h._resolvedReceiverId,
-            receiverUser: receiverUser ? { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role } : (h._resolvedReceiverName ? { id: null, name: h._resolvedReceiverName, role: null } : null),
+            receiverId: h.receiverId,
+            receiverUser: h.receiverUser,
             previousTechnicianName: prevNameDisplay,
-            previousTechnicianId: h._resolvedPreviousTechnicianId,
-            previousTechnicianUser: previousUser ? { id: previousUser.id, name: previousUser.name, role: previousUser.role } : (prevNameDisplay && prevNameDisplay !== "（初始）" ? { id: null, name: prevNameDisplay, role: null } : null),
-            creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
+            previousTechnicianId: h.previousTechnicianId,
+            previousTechnicianUser: h.previousTechnicianUser,
+            creator: h.creator
           }
         };
       });
@@ -3430,23 +3381,14 @@ async function handle(req, res) {
   if (req.method === "GET" && pathname === "/handovers") {
     requireAuth(req, db);
     const clockId = url.searchParams.get("clockId");
-    let data = db.handovers.filter((item) => !clockId || item.clockId === clockId);
+    let visibleClockIds = clockId ? [clockId] : db.clocks.map((clock) => clock.id);
     if (currentUser.role !== USER_ROLES.ADMIN) {
       const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
-      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+      visibleClockIds = visibleClockIds.filter((id) => accessibleClockIds.has(id));
     }
-    data = data.map((item) => {
-      const enriched = enrichWithCreator(db, item);
-      const receiverUser = item.receiverId ? db.users.find((u) => u.id === item.receiverId) : null;
-      if (receiverUser) {
-        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
-      }
-      const previousUser = item.previousTechnicianId ? db.users.find((u) => u.id === item.previousTechnicianId) : null;
-      if (previousUser) {
-        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
-      }
-      return enriched;
-    });
+    const data = visibleClockIds
+      .flatMap((id) => listResolvedHandovers(db, id))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return send(res, 200, { data, total: data.length });
   }
 
