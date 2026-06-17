@@ -8,9 +8,109 @@
 PORT=3021 node server.js
 ```
 
+## 认证与权限
+
+### 认证方式
+所有接口（除 `/health` 和登录接口外）均需在请求头中携带 Bearer Token：
+
+```
+Authorization: Bearer <token>
+```
+
+### 登录获取Token
+
+```bash
+curl -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}'
+```
+
+登录成功返回：
+```json
+{
+  "data": {
+    "user": { "id": "...", "username": "admin", "name": "管理员", "role": "admin", "createdAt": "..." },
+    "token": "tok_xxx",
+    "expiresAt": "2026-06-17T12:00:00.000Z",
+    "permissions": ["user:view", "user:create", "..."]
+  },
+  "message": "登录成功，请在 Authorization 头中使用 Bearer token 访问受保护接口"
+}
+```
+
+**说明：**
+- Token有效期：2小时，过期需重新登录
+- 退出登录会立即注销Token
+
+### 退出登录
+
+```bash
+curl -X POST http://127.0.0.1:3021/auth/logout \
+  -H 'Authorization: Bearer <token>'
+```
+
+### 获取当前登录用户信息
+
+```bash
+curl http://127.0.0.1:3021/auth/me \
+  -H 'Authorization: Bearer <token>'
+```
+
+### 角色与权限矩阵
+
+| 权限项 | admin | technician |
+|---|---|---|
+| 用户管理（查看/创建/更新/删除） | ✅ | 仅查看 |
+| 钟表管理（查看/创建/更新/删除/导入/历史） | ✅ | ✅（负责钟表） |
+| 钟表分配 | ✅ | ❌ |
+| 调校记录（查看/创建） | ✅ | ✅（负责钟表） |
+| 复测记录（查看/创建） | ✅ | ✅（负责钟表） |
+| 交接记录（查看/创建） | ✅ | ✅（负责钟表） |
+| 建议（查看/创建/状态更新） | ✅ | ✅（负责钟表） |
+| 复测任务（查看/创建/更新/取消） | ✅ | ✅（负责钟表） |
+| 工作流（查看/操作） | ✅ | ✅（负责钟表） |
+| 审计日志查看 | ✅ | ✅（负责钟表相关） |
+| 备份恢复（创建/查看/验证/预览/恢复） | ✅ | ❌ |
+| 健康评分规则（查看/管理） | ✅ | 仅查看 |
+| 总览视图 | ✅ | ✅ |
+
+### 认证错误码
+
+| 错误码 | HTTP状态 | 说明 |
+|---|---|---|
+| `TOKEN_MISSING` | 401 | 未携带Token |
+| `TOKEN_EXPIRED` | 401 | Token已过期，需重新登录 |
+| `TOKEN_INVALID` | 401 | Token无效或已注销 |
+| `PERMISSION_DENIED` | 403 | 无权限执行此操作 |
+
+错误响应示例：
+```json
+{
+  "error": "认证令牌已过期，请重新登录",
+  "code": "TOKEN_EXPIRED"
+}
+```
+
+## 内置用户
+
+| 用户名 | 姓名 | 角色 | 说明 |
+|---|---|---|---|
+| `admin` | 管理员 | admin | 系统内置，拥有所有权限 |
+| `zhang` | 张师傅 | technician | 普通技师 |
+| `wang` | 王师傅 | technician | 普通技师 |
+
 ## 主要接口
 
 - `GET /health`
+- `GET /auth/me`
+- `POST /auth/login`
+- `POST /auth/logout`
+- `GET /users`
+- `POST /users`
+- `PUT /users/:id`
+- `DELETE /users/:id`
+- `GET /overview`
+- `GET /workflow/statuses`
 - `GET /clocks`
 - `POST /clocks`
 - `POST /clocks/import/preview`
@@ -22,13 +122,29 @@ PORT=3021 node server.js
 - `GET /clocks/:id/latest-retest`
 - `GET /adjustments?clockId=`
 - `GET /retests?clockId=&qualified=`
+- `GET /audit-logs`
+- `POST /backups`
+- `GET /backups`
+- （更多接口请参考 routes 列表）
 
 ## 闭环示例
 
 ```bash
-curl http://127.0.0.1:3021/clocks/not-qualified
+# 第一步：登录获取Token（管理员）
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+echo "Token: $TOKEN"
+
+# 第二步：查看不合格钟表
+curl http://127.0.0.1:3021/clocks/not-qualified \
+  -H "Authorization: Bearer $TOKEN"
+
+# 第三步：提交复测记录
 curl -X POST http://127.0.0.1:3021/clocks/clock_demo/retests \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"dailyRateSeconds":12,"amplitude":252,"note":"复测进入目标范围"}'
 ```
 
@@ -41,12 +157,20 @@ curl -X POST http://127.0.0.1:3021/clocks/clock_demo/retests \
 - **targetDailyRateSeconds**：校验必须是有效数字（可省略，默认 30）
 - **assignedTechnicianId**：支持用**用户ID**或**用户名**指定负责人
 
-### 第一步：预览导入结果
+### 第一步：登录获取Token
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
+
+### 第二步：预览导入结果
 
 ```bash
 curl -X POST http://127.0.0.1:3021/clocks/import/preview \
   -H 'Content-Type: application/json' \
-  -H 'X-User-Id: user_admin_default' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "clocks": [
       {
@@ -108,14 +232,14 @@ curl -X POST http://127.0.0.1:3021/clocks/import/preview \
   - `reasons`：不可导入原因列表
   - `technician`：负责人解析信息（如有错误）
 
-### 第二步：确认写入（支持全局指定负责人）
+### 第三步：确认写入（支持全局指定负责人）
 
 可通过顶层 `assignedTechnicianId` 为所有记录统一指定负责人（优先级低于单条记录内的指定），同样支持用户名或用户ID：
 
 ```bash
 curl -X POST http://127.0.0.1:3021/clocks/import \
   -H 'Content-Type: application/json' \
-  -H 'X-User-Id: user_admin_default' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "assignedTechnicianId": "zhang",
     "clocks": [
@@ -143,13 +267,22 @@ curl -X POST http://127.0.0.1:3021/clocks/import \
 - `created`：成功创建的记录，每条包含规范化结果、负责人摘要、完整钟表信息
 - `unimportable`：不可导入记录，包含不可导入原因
 
-### 第三步：验证新档案已写入
+### 第四步：验证新档案已写入
 
 ```bash
-curl http://127.0.0.1:3021/clocks -H 'X-User-Id: user_admin_default'
+curl http://127.0.0.1:3021/clocks \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## 师傅交接记录示例
+
+### 登录获取Token（张师傅）
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"zhang"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
 
 ### 新增交接记录
 
@@ -158,6 +291,7 @@ curl http://127.0.0.1:3021/clocks -H 'X-User-Id: user_admin_default'
 ```bash
 curl -X POST http://127.0.0.1:3021/clocks/clock_demo/handovers \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
     "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
@@ -173,20 +307,23 @@ curl -X POST http://127.0.0.1:3021/clocks/clock_demo/handovers \
 查看某只钟表的所有交接记录，按时间倒序排列：
 
 ```bash
-curl http://127.0.0.1:3021/clocks/clock_demo/handovers
+curl http://127.0.0.1:3021/clocks/clock_demo/handovers \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 查询所有交接记录（支持按钟表筛选）
 
 ```bash
 # 查询所有交接记录
-curl http://127.0.0.1:3021/handovers
+curl http://127.0.0.1:3021/handovers \
+  -H "Authorization: Bearer $TOKEN"
 
 # 按钟表筛选
-curl http://127.0.0.1:3021/handovers?clockId=clock_demo
+curl "http://127.0.0.1:3021/handovers?clockId=clock_demo" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### 钟表不存在时的错误提示
+### 未登录时的错误提示
 
 ```bash
 curl http://127.0.0.1:3021/clocks/nonexistent/handovers
@@ -195,20 +332,29 @@ curl http://127.0.0.1:3021/clocks/nonexistent/handovers
 返回：
 ```json
 {
-  "error": "钟表不存在"
+  "error": "未提供认证令牌，请在 Authorization 头中携带 Bearer token",
+  "code": "TOKEN_MISSING"
 }
 ```
 
 ## 复测任务改期与取消示例
+
+### 登录获取Token（管理员）
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
 
 ### 改期复测任务
 
 修改待复测任务的计划复测时间、优先级或备注。只有 **管理员** 或 **该钟表的负责人** 可以操作，且 **已完成** 或 **已取消** 的任务不能改期。
 
 ```bash
-curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending \
+curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_demo \
   -H 'Content-Type: application/json' \
-  -H 'X-User-Id: user_admin_default' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "plannedRetestAt": "2026-07-05T00:00:00.000Z",
     "priority": "high",
@@ -232,9 +378,9 @@ curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending \
 取消一个处于 `pending` 状态的复测任务，并记录取消原因。权限规则同改期。**已完成** 或 **已取消** 的任务不能再取消。
 
 ```bash
-curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending/cancel \
+curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_demo/cancel \
   -H 'Content-Type: application/json' \
-  -H 'X-User-Id: user_admin_default' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "cancelReason": "客户临时送修其他故障，复测延后安排"
   }'
@@ -254,19 +400,21 @@ curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending/cancel
 
 ```bash
 # 全量任务（含已取消的）
-curl http://127.0.0.1:3021/retest-tasks -H 'X-User-Id: user_admin_default'
+curl http://127.0.0.1:3021/retest-tasks \
+  -H "Authorization: Bearer $TOKEN"
 
 # 按状态筛选已取消的任务
-curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" -H 'X-User-Id: user_admin_default'
+curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 权限与状态错误
 
-**无权限（非负责人且非管理员）：**
+**无权限（非负责人且非管理员，使用技师Token访问其他负责人任务）：**
 ```json
 {
   "error": "无权限操作该复测任务",
-  "code": "FORBIDDEN"
+  "code": "PERMISSION_DENIED"
 }
 ```
 
@@ -283,5 +431,13 @@ curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" -H 'X-User-Id: user_a
 {
   "error": "已取消的复测任务不能改期",
   "code": "TASK_ALREADY_CANCELLED"
+}
+```
+
+**Token过期：**
+```json
+{
+  "error": "认证令牌已过期，请重新登录",
+  "code": "TOKEN_EXPIRED"
 }
 ```

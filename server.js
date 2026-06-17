@@ -22,13 +22,98 @@ const DB_SCHEMA = {
   retestTasks: "array",
   suggestions: "array",
   auditLogs: "array",
-  healthScoreRules: "array"
+  healthScoreRules: "array",
+  sessions: "array"
 };
 
 const USER_ROLES = {
   ADMIN: "admin",
   TECHNICIAN: "technician"
 };
+
+const PERMISSIONS = {
+  USER_VIEW: "user:view",
+  USER_CREATE: "user:create",
+  USER_UPDATE: "user:update",
+  USER_DELETE: "user:delete",
+
+  CLOCK_VIEW: "clock:view",
+  CLOCK_CREATE: "clock:create",
+  CLOCK_UPDATE: "clock:update",
+  CLOCK_DELETE: "clock:delete",
+  CLOCK_ASSIGN: "clock:assign",
+
+  ADJUSTMENT_VIEW: "adjustment:view",
+  ADJUSTMENT_CREATE: "adjustment:create",
+
+  RETEST_VIEW: "retest:view",
+  RETEST_CREATE: "retest:create",
+
+  HANDOVER_VIEW: "handover:view",
+  HANDOVER_CREATE: "handover:create",
+
+  SUGGESTION_VIEW: "suggestion:view",
+  SUGGESTION_CREATE: "suggestion:create",
+  SUGGESTION_STATUS_UPDATE: "suggestion:status_update",
+
+  RETEST_TASK_VIEW: "retest_task:view",
+  RETEST_TASK_CREATE: "retest_task:create",
+  RETEST_TASK_UPDATE: "retest_task:update",
+  RETEST_TASK_CANCEL: "retest_task:cancel",
+
+  AUDIT_VIEW: "audit:view",
+
+  BACKUP_CREATE: "backup:create",
+  BACKUP_VIEW: "backup:view",
+  BACKUP_VALIDATE: "backup:validate",
+  BACKUP_PREVIEW: "backup:preview",
+  BACKUP_RESTORE: "backup:restore",
+
+  HEALTH_SCORE_RULE_VIEW: "health_score_rule:view",
+  HEALTH_SCORE_RULE_MANAGE: "health_score_rule:manage",
+
+  OVERVIEW_VIEW: "overview:view",
+  WORKFLOW_VIEW: "workflow:view",
+  WORKFLOW_OPERATE: "workflow:operate",
+
+  CLOCK_IMPORT: "clock:import",
+  CLOCK_HISTORY_VIEW: "clock_history:view"
+};
+
+const ROLE_PERMISSIONS = {
+  [USER_ROLES.ADMIN]: Object.values(PERMISSIONS),
+  [USER_ROLES.TECHNICIAN]: [
+    PERMISSIONS.USER_VIEW,
+    PERMISSIONS.CLOCK_VIEW,
+    PERMISSIONS.CLOCK_CREATE,
+    PERMISSIONS.CLOCK_UPDATE,
+    PERMISSIONS.ADJUSTMENT_VIEW,
+    PERMISSIONS.ADJUSTMENT_CREATE,
+    PERMISSIONS.RETEST_VIEW,
+    PERMISSIONS.RETEST_CREATE,
+    PERMISSIONS.HANDOVER_VIEW,
+    PERMISSIONS.HANDOVER_CREATE,
+    PERMISSIONS.SUGGESTION_VIEW,
+    PERMISSIONS.SUGGESTION_CREATE,
+    PERMISSIONS.RETEST_TASK_VIEW,
+    PERMISSIONS.RETEST_TASK_CREATE,
+    PERMISSIONS.RETEST_TASK_UPDATE,
+    PERMISSIONS.OVERVIEW_VIEW,
+    PERMISSIONS.HEALTH_SCORE_RULE_VIEW,
+    PERMISSIONS.WORKFLOW_VIEW,
+    PERMISSIONS.WORKFLOW_OPERATE,
+    PERMISSIONS.CLOCK_HISTORY_VIEW
+  ]
+};
+
+const AUTH_ERROR_CODES = {
+  TOKEN_MISSING: "TOKEN_MISSING",
+  TOKEN_EXPIRED: "TOKEN_EXPIRED",
+  TOKEN_INVALID: "TOKEN_INVALID",
+  PERMISSION_DENIED: "PERMISSION_DENIED"
+};
+
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
 const DEFAULT_SYSTEM_USER_ID = "user_system";
 const DEFAULT_ADMIN_USER_ID = "user_admin_default";
@@ -155,7 +240,8 @@ const initialData = {
       createdAt: new Date().toISOString(),
       createdBy: DEFAULT_SYSTEM_USER_ID
     }
-  ]
+  ],
+  sessions: []
 };
 
 const AUDIT_OPERATION_TYPES = {
@@ -553,6 +639,7 @@ const routes = [
   "GET /health",
   "GET /auth/me",
   "POST /auth/login",
+  "POST /auth/logout",
   "GET /users",
   "POST /users",
   "PUT /users/:id",
@@ -2219,11 +2306,12 @@ async function ensureDb() {
   const needsMigration4 = migrateDbAddHealthScoreRules(dbData);
   const needsMigration5 = migrateDbAddSuggestionStatusFields(dbData);
   const needsMigration6 = migrateDbGenerateWorkflowEvents(dbData);
+  const needsMigration7 = migrateDbAddSessions(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || needsMigration5 || needsMigration6 || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || needsMigration5 || needsMigration6 || needsMigration7 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
 }
@@ -2415,6 +2503,15 @@ function migrateDbAddSuggestionStatusFields(dbData) {
   return changed;
 }
 
+function migrateDbAddSessions(dbData) {
+  let changed = false;
+  if (!dbData.sessions || !Array.isArray(dbData.sessions)) {
+    dbData.sessions = [];
+    changed = true;
+  }
+  return changed;
+}
+
 function findPendingSuggestionsByClockId(db, clockId) {
   return (db.suggestions || []).filter(
     (s) => s.clockId === clockId && s.status === SUGGESTION_STATUSES.PENDING
@@ -2449,34 +2546,126 @@ function enrichSuggestion(db, suggestion) {
   );
 }
 
-function getCurrentUser(req, db) {
-  const userId = req.headers["x-user-id"];
-  if (userId) {
-    return db.users.find((u) => u.id === userId) || null;
+function generateToken() {
+  return "tok_" + crypto.randomBytes(24).toString("hex");
+}
+
+function createSession(db, userId) {
+  const now = Date.now();
+  const session = {
+    id: generateToken(),
+    userId,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + SESSION_TTL_MS).toISOString(),
+    revokedAt: null,
+    lastAccessedAt: new Date(now).toISOString()
+  };
+  if (!db.sessions) db.sessions = [];
+  db.sessions.push(session);
+  return session;
+}
+
+function findSessionByToken(db, token) {
+  if (!db.sessions || !token) return null;
+  return db.sessions.find((s) => s.id === token) || null;
+}
+
+function isSessionValid(session) {
+  if (!session) return false;
+  if (session.revokedAt) return false;
+  return new Date(session.expiresAt) > new Date();
+}
+
+function revokeSession(db, token) {
+  const session = findSessionByToken(db, token);
+  if (session) {
+    session.revokedAt = new Date().toISOString();
   }
-  return db.users.find((u) => u.id === DEFAULT_SYSTEM_USER_ID) || null;
+  return session;
+}
+
+function getUserPermissions(user) {
+  if (!user) return [];
+  return ROLE_PERMISSIONS[user.role] || [];
+}
+
+function hasPermission(user, permission) {
+  const perms = getUserPermissions(user);
+  return perms.includes(permission);
+}
+
+function getTokenFromRequest(req) {
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice(7);
+  }
+  return null;
+}
+
+function getCurrentUser(req, db) {
+  const token = getTokenFromRequest(req);
+  if (token) {
+    const session = findSessionByToken(db, token);
+    if (session && isSessionValid(session)) {
+      session.lastAccessedAt = new Date().toISOString();
+      const user = db.users.find((u) => u.id === session.userId);
+      return user || null;
+    }
+  }
+  return null;
 }
 
 function requireAuth(req, db) {
-  const user = getCurrentUser(req, db);
-  if (!user) {
-    const error = new Error("未授权，请通过 X-User-Id 头传递用户ID");
+  const token = getTokenFromRequest(req);
+  if (!token) {
+    const error = new Error("未提供认证令牌，请在 Authorization 头中携带 Bearer token");
     error.status = 401;
-    error.code = "UNAUTHORIZED";
+    error.code = AUTH_ERROR_CODES.TOKEN_MISSING;
+    throw error;
+  }
+  const session = findSessionByToken(db, token);
+  if (!session) {
+    const error = new Error("认证令牌无效");
+    error.status = 401;
+    error.code = AUTH_ERROR_CODES.TOKEN_INVALID;
+    throw error;
+  }
+  if (session.revokedAt) {
+    const error = new Error("认证令牌已注销，请重新登录");
+    error.status = 401;
+    error.code = AUTH_ERROR_CODES.TOKEN_INVALID;
+    throw error;
+  }
+  if (new Date(session.expiresAt) <= new Date()) {
+    const error = new Error("认证令牌已过期，请重新登录");
+    error.status = 401;
+    error.code = AUTH_ERROR_CODES.TOKEN_EXPIRED;
+    throw error;
+  }
+  session.lastAccessedAt = new Date().toISOString();
+  const user = db.users.find((u) => u.id === session.userId);
+  if (!user) {
+    const error = new Error("认证令牌对应用户不存在，请重新登录");
+    error.status = 401;
+    error.code = AUTH_ERROR_CODES.TOKEN_INVALID;
+    throw error;
+  }
+  return user;
+}
+
+function requirePermission(req, db, permission) {
+  const user = requireAuth(req, db);
+  if (!hasPermission(user, permission)) {
+    const error = new Error("无权限执行此操作");
+    error.status = 403;
+    error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
     throw error;
   }
   return user;
 }
 
 function requireAdmin(req, db) {
-  const user = requireAuth(req, db);
-  if (user.role !== USER_ROLES.ADMIN) {
-    const error = new Error("需要管理员权限");
-    error.status = 403;
-    error.code = "FORBIDDEN";
-    throw error;
-  }
-  return user;
+  return requirePermission(req, db, PERMISSIONS.USER_CREATE);
 }
 
 function canAccessClock(clock, user) {
@@ -2582,11 +2771,33 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/auth/me") {
-    const user = currentUser;
-    if (!user) {
-      return send(res, 200, { data: null, roles: USER_ROLES });
+    const token = getTokenFromRequest(req);
+    let user = null;
+    let sessionInfo = null;
+    if (token) {
+      const session = findSessionByToken(db, token);
+      if (session && isSessionValid(session)) {
+        user = db.users.find((u) => u.id === session.userId) || null;
+        sessionInfo = {
+          createdAt: session.createdAt,
+          expiresAt: session.expiresAt,
+          lastAccessedAt: session.lastAccessedAt
+        };
+      }
     }
-    return send(res, 200, { data: userSummary(user), roles: USER_ROLES });
+    if (!user) {
+      return send(res, 200, { data: null, roles: USER_ROLES, permissions: [], authErrorCodes: AUTH_ERROR_CODES });
+    }
+    return send(res, 200, {
+      data: {
+        ...userSummary(user),
+        permissions: getUserPermissions(user),
+        session: sessionInfo
+      },
+      roles: USER_ROLES,
+      permissionList: PERMISSIONS,
+      authErrorCodes: AUTH_ERROR_CODES
+    });
   }
 
   if (req.method === "POST" && pathname === "/auth/login") {
@@ -2599,17 +2810,30 @@ async function handle(req, res) {
       error.code = "INVALID_USER";
       throw error;
     }
+    const session = createSession(db, user.id);
+    await writeDb(db);
     return send(res, 200, {
       data: {
         user: userSummary(user),
-        token: user.id
+        token: session.id,
+        expiresAt: session.expiresAt,
+        permissions: getUserPermissions(user)
       },
-      message: "本地开发模式：请将 token 放入 X-User-Id 请求头中使用"
+      message: "登录成功，请在 Authorization 头中使用 Bearer token 访问受保护接口"
     });
   }
 
+  if (req.method === "POST" && pathname === "/auth/logout") {
+    const token = getTokenFromRequest(req);
+    if (token) {
+      revokeSession(db, token);
+      await writeDb(db);
+    }
+    return send(res, 200, { message: "已退出登录" });
+  }
+
   if (req.method === "GET" && pathname === "/users") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.USER_VIEW);
     const role = url.searchParams.get("role");
     let data = db.users.map((u) => userSummary(u));
     if (role) {
@@ -2620,11 +2844,11 @@ async function handle(req, res) {
       admin: db.users.filter((u) => u.role === USER_ROLES.ADMIN).length,
       technician: db.users.filter((u) => u.role === USER_ROLES.TECHNICIAN).length
     };
-    return send(res, 200, { data, stats, roles: USER_ROLES });
+    return send(res, 200, { data, stats, roles: USER_ROLES, permissions: PERMISSIONS });
   }
 
   if (req.method === "POST" && pathname === "/users") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.USER_CREATE);
     const body = await parseBody(req);
     required(body, ["username", "name", "role"]);
     const validRoles = Object.values(USER_ROLES);
@@ -2666,7 +2890,7 @@ async function handle(req, res) {
 
   const userUpdateMatch = pathname.match(/^\/users\/([^/]+)$/);
   if (userUpdateMatch && req.method === "PUT") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.USER_UPDATE);
     const user = findUser(db, userUpdateMatch[1]);
     const body = await parseBody(req);
     const beforeSnapshot = extractKeyFields(user, USER_KEY_FIELDS);
@@ -2700,7 +2924,7 @@ async function handle(req, res) {
   }
 
   if (userUpdateMatch && req.method === "DELETE") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.USER_DELETE);
     const userId = userUpdateMatch[1];
     const userIndex = db.users.findIndex((u) => u.id === userId);
     if (userIndex === -1) {
@@ -2737,7 +2961,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/health-score-rules") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HEALTH_SCORE_RULE_VIEW);
     const rules = db.healthScoreRules || [];
     return send(res, 200, {
       data: rules,
@@ -2749,7 +2973,7 @@ async function handle(req, res) {
 
   const healthScoreRuleDetailMatch = pathname.match(/^\/health-score-rules\/([^/]+)$/);
   if (healthScoreRuleDetailMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HEALTH_SCORE_RULE_VIEW);
     const ruleId = healthScoreRuleDetailMatch[1];
     if (ruleId === "default") {
       return send(res, 200, {
@@ -2775,7 +2999,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/health-score-rules") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.HEALTH_SCORE_RULE_MANAGE);
     const body = await parseBody(req);
     required(body, ["name", "escapementType", "version", "rules"]);
 
@@ -2819,7 +3043,7 @@ async function handle(req, res) {
   }
 
   if (healthScoreRuleDetailMatch && req.method === "PUT") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.HEALTH_SCORE_RULE_MANAGE);
     const ruleId = healthScoreRuleDetailMatch[1];
     if (ruleId === "default") {
       const error = new Error("默认规则不可修改");
@@ -2873,7 +3097,7 @@ async function handle(req, res) {
   }
 
   if (healthScoreRuleDetailMatch && req.method === "DELETE") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.HEALTH_SCORE_RULE_MANAGE);
     const ruleId = healthScoreRuleDetailMatch[1];
     if (ruleId === "default") {
       const error = new Error("默认规则不可删除");
@@ -2892,12 +3116,12 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/overview") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.OVERVIEW_VIEW);
     return send(res, 200, { data: buildOverview(db, currentUser) });
   }
 
   if (req.method === "GET" && pathname === "/clocks") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_VIEW);
     const qualified = url.searchParams.get("qualified");
     const assignedTechnicianId = url.searchParams.get("assignedTechnicianId");
     let accessibleClocks = filterClocksByUser(db, currentUser);
@@ -2913,7 +3137,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/clocks") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_CREATE);
     const body = await parseBody(req);
     required(body, ["code", "escapementType", "balanceFrequency"]);
     let assignedTechnicianId = body.assignedTechnicianId || null;
@@ -2957,8 +3181,14 @@ async function handle(req, res) {
 
   const clockUpdateMatch = pathname.match(/^\/clocks\/([^/]+)$/);
   if (clockUpdateMatch && req.method === "PUT") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_UPDATE);
     const clock = findClock(db, clockUpdateMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限修改该钟表");
+      error.status = 403;
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
+      throw error;
+    }
     const body = await parseBody(req);
 
     const beforeKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
@@ -2968,7 +3198,7 @@ async function handle(req, res) {
     if (body.balanceFrequency !== undefined) clock.balanceFrequency = body.balanceFrequency;
     if (body.targetDailyRateSeconds !== undefined) clock.targetDailyRateSeconds = Number(body.targetDailyRateSeconds);
     if (body.note !== undefined) clock.note = body.note || "";
-    if (body.assignedTechnicianId !== undefined && currentUser.role === USER_ROLES.ADMIN) {
+    if (body.assignedTechnicianId !== undefined && hasPermission(currentUser, PERMISSIONS.CLOCK_ASSIGN)) {
       if (body.assignedTechnicianId) {
         const tech = db.users.find((u) => u.id === body.assignedTechnicianId);
         if (!tech) {
@@ -2987,7 +3217,6 @@ async function handle(req, res) {
     if (changedFields) {
       createAuditLog(db, {
         createdBy: currentUser.id,
-      createdBy: currentUser.id,
         operationType: AUDIT_OPERATION_TYPES.CLOCK_UPDATE,
         resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
         resourceId: clock.id,
@@ -3007,7 +3236,7 @@ async function handle(req, res) {
 
   const clockAssignMatch = pathname.match(/^\/clocks\/([^/]+)\/assign$/);
   if (clockAssignMatch && req.method === "PUT") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_ASSIGN);
     const clock = findClock(db, clockAssignMatch[1]);
     const body = await parseBody(req);
     const { technicianId, handoverNote, nextStepSuggestion } = body;
@@ -3113,7 +3342,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/clocks/import/preview") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_IMPORT);
     const body = await parseBody(req);
     if (!Array.isArray(body.clocks)) {
       const error = new Error("请求体必须包含 clocks 数组");
@@ -3168,7 +3397,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/clocks/import") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_IMPORT);
     const body = await parseBody(req);
     if (!Array.isArray(body.clocks)) {
       const error = new Error("请求体必须包含 clocks 数组");
@@ -3255,14 +3484,14 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/clocks/not-qualified") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_VIEW);
     const accessibleClocks = filterClocksByUser(db, currentUser);
     const data = accessibleClocks.map((clock) => clockSummary(db, clock)).filter((clock) => !clock.qualified);
     return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/clocks/health-scores") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_VIEW);
     const conclusion = url.searchParams.get("conclusion");
     const conclusionKeyParam = url.searchParams.get("conclusionKey");
     const accessibleClocks = filterClocksByUser(db, currentUser);
@@ -3291,12 +3520,12 @@ async function handle(req, res) {
 
   const historyMatch = pathname.match(/^\/clocks\/([^/]+)\/history$/);
   if (historyMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_HISTORY_VIEW);
     const clock = findClock(db, historyMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id).map((a) => enrichWithCreator(db, a));
@@ -3313,12 +3542,12 @@ async function handle(req, res) {
 
   const auditLogsByClockMatch = pathname.match(/^\/clocks\/([^/]+)\/audit-logs$/);
   if (auditLogsByClockMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.AUDIT_VIEW);
     const clock = findClock(db, auditLogsByClockMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const logs = listAuditLogsByClock(db, clock.id);
@@ -3377,7 +3606,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/audit-logs") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.AUDIT_VIEW);
     const operationType = url.searchParams.get("operationType");
     const resourceType = url.searchParams.get("resourceType");
     const clockId = url.searchParams.get("clockId");
@@ -3466,12 +3695,12 @@ async function handle(req, res) {
 
   const workflowStatusMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow-status$/);
   if (workflowStatusMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_VIEW);
     const clock = findClock(db, workflowStatusMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     return send(res, 200, { data: buildWorkflowStatusInfo(db, clock.id) });
@@ -3479,12 +3708,12 @@ async function handle(req, res) {
 
   const workflowInitialAdjustMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/initial-adjust$/);
   if (workflowInitialAdjustMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowInitialAdjustMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
@@ -3539,12 +3768,12 @@ async function handle(req, res) {
 
   const workflowSubmitRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/submit-retest$/);
   if (workflowSubmitRetestMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowSubmitRetestMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
@@ -3624,12 +3853,12 @@ async function handle(req, res) {
 
   const workflowCompleteRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/complete-retest$/);
   if (workflowCompleteRetestMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowCompleteRetestMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
@@ -3744,12 +3973,12 @@ async function handle(req, res) {
 
   const workflowReworkMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/rework$/);
   if (workflowReworkMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowReworkMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
@@ -3824,7 +4053,7 @@ async function handle(req, res) {
 
   const workflowArchiveMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/archive$/);
   if (workflowArchiveMatch && req.method === "POST") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowArchiveMatch[1]);
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.ARCHIVE);
@@ -3871,12 +4100,12 @@ async function handle(req, res) {
 
   const workflowUnarchiveRecheckMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/unarchive-recheck$/);
   if (workflowUnarchiveRecheckMatch && req.method === "POST") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_OPERATE);
     const clock = findClock(db, workflowUnarchiveRecheckMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
@@ -3947,12 +4176,12 @@ async function handle(req, res) {
 
   const workflowEventsMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow-events$/);
   if (workflowEventsMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_VIEW);
     const clock = findClock(db, workflowEventsMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const timeline = getWorkflowTimeline(db, clock.id);
@@ -3970,12 +4199,12 @@ async function handle(req, res) {
 
   const healthScoreMatch = pathname.match(/^\/clocks\/([^/]+)\/health-score$/);
   if (healthScoreMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.CLOCK_VIEW);
     const clock = findClock(db, healthScoreMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     return send(res, 200, { data: calculateHealthScore(db, clock) });
@@ -3983,12 +4212,12 @@ async function handle(req, res) {
 
   const adjustmentMatch = pathname.match(/^\/clocks\/([^/]+)\/adjustments$/);
   if (adjustmentMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.ADJUSTMENT_CREATE);
     const clock = findClock(db, adjustmentMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const body = await parseBody(req);
@@ -4050,12 +4279,12 @@ async function handle(req, res) {
 
   const retestMatch = pathname.match(/^\/clocks\/([^/]+)\/retests$/);
   if (retestMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_CREATE);
     const clock = findClock(db, retestMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const body = await parseBody(req);
@@ -4181,12 +4410,12 @@ async function handle(req, res) {
 
   const latestMatch = pathname.match(/^\/clocks\/([^/]+)\/latest-retest$/);
   if (latestMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_VIEW);
     const clock = findClock(db, latestMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     return send(res, 200, { data: enrichWithCreator(db, latestRetest(db, latestMatch[1])) });
@@ -4194,7 +4423,7 @@ async function handle(req, res) {
 
   const handoverListMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverListMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HANDOVER_VIEW);
     const clock = findClock(db, handoverListMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       if (currentUser.role === USER_ROLES.TECHNICIAN) {
@@ -4202,13 +4431,13 @@ async function handle(req, res) {
         if (!hasHistory) {
           const error = new Error("普通技师只能查看自己当前负责钟表的交接历史");
           error.status = 403;
-          error.code = "FORBIDDEN";
+          error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
           throw error;
         }
       } else {
         const error = new Error("无权限访问该钟表档案");
         error.status = 403;
-        error.code = "FORBIDDEN";
+        error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
         throw error;
       }
     }
@@ -4218,14 +4447,14 @@ async function handle(req, res) {
 
   const handoverCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverCreateMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HANDOVER_CREATE);
     const clock = findClock(db, handoverCreateMatch[1]);
 
     if (currentUser.role !== USER_ROLES.ADMIN) {
       if (clock.assignedTechnicianId !== currentUser.id) {
         const error = new Error("普通技师只能为自己当前负责的钟表发起交接");
         error.status = 403;
-        error.code = "FORBIDDEN";
+        error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
         throw error;
       }
     }
@@ -4314,20 +4543,20 @@ async function handle(req, res) {
 
   const handoverTimelineMatch = pathname.match(/^\/clocks\/([^/]+)\/handover-timeline$/);
   if (handoverTimelineMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HANDOVER_VIEW);
     const clock = findClock(db, handoverTimelineMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       if (currentUser.role === USER_ROLES.TECHNICIAN) {
         if (clock.assignedTechnicianId !== currentUser.id) {
           const error = new Error("普通技师只能查看自己当前负责钟表的交接历史");
           error.status = 403;
-          error.code = "FORBIDDEN";
+          error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
           throw error;
         }
       } else {
         const error = new Error("无权限访问该钟表档案");
         error.status = 403;
-        error.code = "FORBIDDEN";
+        error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
         throw error;
       }
     }
@@ -4387,7 +4616,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/adjustments") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.ADJUSTMENT_VIEW);
     const clockId = url.searchParams.get("clockId");
     let data = db.adjustments.filter((item) => !clockId || item.clockId === clockId);
     if (currentUser.role !== USER_ROLES.ADMIN) {
@@ -4399,7 +4628,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/retests") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_VIEW);
     const clockId = url.searchParams.get("clockId");
     const qualified = url.searchParams.get("qualified");
     let data = db.retests.filter((item) => {
@@ -4416,7 +4645,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/retest-tasks") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_TASK_VIEW);
     const status = url.searchParams.get("status");
     const priority = url.searchParams.get("priority");
     const overdue = url.searchParams.get("overdue");
@@ -4456,12 +4685,12 @@ async function handle(req, res) {
 
   const retestTaskCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
   if (retestTaskCreateMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_TASK_CREATE);
     const clock = findClock(db, retestTaskCreateMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const body = await parseBody(req);
@@ -4521,12 +4750,12 @@ async function handle(req, res) {
 
   const retestTaskListMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
   if (retestTaskListMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_TASK_VIEW);
     const clock = findClock(db, retestTaskListMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const now = new Date();
@@ -4543,12 +4772,12 @@ async function handle(req, res) {
 
   const retestTaskUpdateMatch = pathname.match(/^\/retest-tasks\/([^/]+)$/);
   if (retestTaskUpdateMatch && req.method === "PUT") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_TASK_UPDATE);
     const task = findRetestTask(db, retestTaskUpdateMatch[1]);
     if (!canManageRetestTask(db, task, currentUser)) {
       const error = new Error("无权限操作该复测任务");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     if (task.status === "completed") {
@@ -4606,12 +4835,12 @@ async function handle(req, res) {
 
   const retestTaskCancelMatch = pathname.match(/^\/retest-tasks\/([^/]+)\/cancel$/);
   if (retestTaskCancelMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.RETEST_TASK_CANCEL);
     const task = findRetestTask(db, retestTaskCancelMatch[1]);
     if (!canManageRetestTask(db, task, currentUser)) {
       const error = new Error("无权限操作该复测任务");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     if (task.status === "completed") {
@@ -4657,7 +4886,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/handovers") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.HANDOVER_VIEW);
     const clockId = url.searchParams.get("clockId");
     let visibleClockIds = clockId ? [clockId] : db.clocks.map((clock) => clock.id);
     if (currentUser.role !== USER_ROLES.ADMIN) {
@@ -4672,12 +4901,12 @@ async function handle(req, res) {
 
   const generateSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions\/generate$/);
   if (generateSuggestionMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_CREATE);
     const clock = findClock(db, generateSuggestionMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const pendingSuggestions = findPendingSuggestionsByClockId(db, clock.id);
@@ -4696,12 +4925,12 @@ async function handle(req, res) {
 
   const saveSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
   if (saveSuggestionMatch && req.method === "POST") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_CREATE);
     const clock = findClock(db, saveSuggestionMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const body = await parseBody(req);
@@ -4758,12 +4987,12 @@ async function handle(req, res) {
 
   const listSuggestionsMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
   if (listSuggestionsMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_VIEW);
     const clock = findClock(db, listSuggestionsMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该钟表档案");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const data = listSuggestions(db, clock.id).map((s) => enrichSuggestion(db, s));
@@ -4771,7 +5000,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/suggestions") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_VIEW);
     const clockId = url.searchParams.get("clockId");
     let data = listSuggestions(db, clockId);
     if (currentUser.role !== USER_ROLES.ADMIN) {
@@ -4784,13 +5013,13 @@ async function handle(req, res) {
 
   const suggestionStatusUpdateMatch = pathname.match(/^\/suggestions\/([^/]+)\/status$/);
   if (suggestionStatusUpdateMatch && req.method === "PATCH") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_STATUS_UPDATE);
     const suggestion = findSuggestion(db, suggestionStatusUpdateMatch[1]);
     const clock = db.clocks.find((c) => c.id === suggestion.clockId) || null;
     if (clock && !canAccessClock(clock, currentUser)) {
       const error = new Error("无权限操作该建议记录");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     const body = await parseBody(req);
@@ -4858,13 +5087,13 @@ async function handle(req, res) {
 
   const suggestionDetailMatch = pathname.match(/^\/suggestions\/([^/]+)$/);
   if (suggestionDetailMatch && req.method === "GET") {
-    requireAuth(req, db);
+    requirePermission(req, db, PERMISSIONS.SUGGESTION_VIEW);
     const suggestion = findSuggestion(db, suggestionDetailMatch[1]);
     const clock = db.clocks.find((c) => c.id === suggestion.clockId) || null;
     if (clock && !canAccessClock(clock, currentUser)) {
       const error = new Error("无权限访问该建议记录");
       error.status = 403;
-      error.code = "FORBIDDEN";
+      error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
       throw error;
     }
     return send(res, 200, {
@@ -4970,15 +5199,31 @@ async function handle(req, res) {
     return send(res, 200, { data: result });
   }
 
-  return send(res, 404, { error: "接口不存在", routes });
+  return send(res, 404, { error: "接口不存在", code: "ENDPOINT_NOT_FOUND", routes });
 }
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((error) => {
+    const status = error.status || 500;
     const body = { error: error.message || "服务器错误" };
-    if (error.code) body.code = error.code;
+    if (error.code) {
+      body.code = error.code;
+    } else if (status === 401) {
+      body.code = AUTH_ERROR_CODES.TOKEN_INVALID;
+    } else if (status === 403) {
+      body.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
+    }
     if (error.details) body.details = error.details;
-    send(res, error.status || 500, body);
+    if (status === 401 || status === 403) {
+      body.authErrorCodes = AUTH_ERROR_CODES;
+      body.loginRequired = status === 401;
+      if (status === 401) {
+        body.hint = "请通过 POST /auth/login 登录获取 token，然后在 Authorization 头中携带 Bearer <token>";
+      } else {
+        body.hint = "您的账号角色不具备该操作所需的权限，请联系管理员";
+      }
+    }
+    send(res, status, body);
   });
 });
 

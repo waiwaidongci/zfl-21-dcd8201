@@ -27,6 +27,13 @@
       "name": "王师傅",
       "role": "technician",
       "createdAt": "2026-06-17T10:22:49.431Z"
+    },
+    {
+      "id": "user_mqi7edmj_lp0ldi",
+      "username": "li",
+      "name": "李师傅",
+      "role": "technician",
+      "createdAt": "2026-06-17T15:06:10.171Z"
     }
   ],
   "clocks": [
@@ -151,6 +158,87 @@
       "summary": "恢复数据备份 backup_20260617_185728_340",
       "createdAt": "2026-06-17T10:59:45.978Z",
       "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqi7edmj_pnsjc1",
+      "operationType": "user_create",
+      "resourceType": "user",
+      "resourceId": "user_mqi7edmj_lp0ldi",
+      "clockId": null,
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "username": "li",
+        "name": "李师傅",
+        "role": "technician"
+      },
+      "changedFields": null,
+      "summary": "创建用户 li（李师傅），角色：technician",
+      "createdAt": "2026-06-17T15:06:10.171Z",
+      "createdBy": "user_admin_default"
+    }
+  ],
+  "workflowEvents": [
+    {
+      "id": "wfevt_mqi7cvh8_0hrdzs",
+      "clockId": "clock_demo",
+      "eventType": "initial_adjusted",
+      "occurredAt": "2026-06-17T10:22:49.431Z",
+      "createdBy": "user_system",
+      "note": "初次调校，先保守处理",
+      "relatedAdjustmentId": "adjustment_demo",
+      "relatedRetestId": null,
+      "meta": {
+        "source": "migration_legacy",
+        "legacyWorkflowOperation": null
+      }
+    },
+    {
+      "id": "wfevt_mqi7cvh8_6cokvp",
+      "clockId": "clock_demo",
+      "eventType": "completed_retest_failed",
+      "occurredAt": "2026-06-17T10:22:49.432Z",
+      "createdBy": "user_system",
+      "note": "仍偏快，振幅尚可",
+      "relatedAdjustmentId": "adjustment_demo",
+      "relatedRetestId": "retest_demo",
+      "meta": {
+        "source": "migration_legacy",
+        "qualified": false
+      }
+    }
+  ],
+  "sessions": [
+    {
+      "id": "tok_f58d2ee9f6b309fea59312645e0e45518a471330d253127c",
+      "userId": "user_admin_default",
+      "createdAt": "2026-06-17T15:05:14.157Z",
+      "expiresAt": "2026-06-17T17:05:14.157Z",
+      "revokedAt": null,
+      "lastAccessedAt": "2026-06-17T15:06:10.171Z"
+    },
+    {
+      "id": "tok_1e1583774db7b200d6d47ed70ea00d8aa464d0682c2715ea",
+      "userId": "user_tech_zhang",
+      "createdAt": "2026-06-17T15:05:36.358Z",
+      "expiresAt": "2026-06-17T17:05:36.358Z",
+      "revokedAt": "2026-06-17T15:06:10.115Z",
+      "lastAccessedAt": "2026-06-17T15:06:10.114Z"
+    },
+    {
+      "id": "tok_2441f0a7a0697929eee98e2083b69128817ea69b479f93ee",
+      "userId": "user_admin_default",
+      "createdAt": "2026-06-17T15:09:26.373Z",
+      "expiresAt": "2026-06-17T17:09:26.373Z",
+      "revokedAt": null,
+      "lastAccessedAt": "2026-06-17T15:09:26.373Z"
+    },
+    {
+      "id": "tok_230efdb562c0b9c7505d72cd7280e681a82a5d30ac20e6dc",
+      "userId": "user_tech_zhang",
+      "createdAt": "2026-06-17T15:09:26.391Z",
+      "expiresAt": "2026-06-17T17:09:26.391Z",
+      "revokedAt": "2026-06-17T15:09:26.539Z",
+      "lastAccessedAt": "2026-06-17T15:09:26.539Z"
     }
   ]
 }
