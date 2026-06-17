@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "id": "backup_20260617_185728_340",
+    "createdAt": "2026-06-17T10:57:28.340Z",
+    "schemaVersion": "1.0",
+    "counts": {
+      "users": 4,
+      "clocks": 1,
+      "adjustments": 1,
+      "retests": 1,
+      "handovers": 1,
+      "retestTasks": 1,
+      "suggestions": 0,
+      "auditLogs": 1,
+      "healthScoreRules": 0
+    }
+  },
+  "data": {
+    "users": [
+      {
+        "id": "user_system",
+        "username": "system",
+        "name": "系统",
+        "role": "admin",
+        "createdAt": "2026-06-17T10:22:49.419Z"
+      },
+      {
+        "id": "user_admin_default",
+        "username": "admin",
+        "name": "管理员",
+        "role": "admin",
+        "createdAt": "2026-06-17T10:22:49.431Z"
+      },
+      {
+        "id": "user_tech_zhang",
+        "username": "zhang",
+        "name": "张师傅",
+        "role": "technician",
+        "createdAt": "2026-06-17T10:22:49.431Z"
+      },
+      {
+        "id": "user_tech_wang",
+        "username": "wang",
+        "name": "王师傅",
+        "role": "technician",
+        "createdAt": "2026-06-17T10:22:49.431Z"
+      }
+    ],
+    "clocks": [
+      {
+        "id": "clock_demo",
+        "code": "CLK-1890-07",
+        "escapementType": "瑞士杠杆式",
+        "balanceFrequency": "18000vph",
+        "targetDailyRateSeconds": 20,
+        "note": "怀表机芯，走时偏快",
+        "assignedTechnicianId": "user_tech_zhang",
+        "createdAt": "2026-06-17T10:22:49.431Z",
+        "createdBy": "user_system"
+      }
+    ],
+    "adjustments": [
+      {
+        "id": "adjustment_demo",
+        "clockId": "clock_demo",
+        "currentDailyRateSeconds": 68,
+        "direction": "慢针方向",
+        "amount": "游丝快慢针向慢侧微调0.4格",
+        "note": "初次调校，先保守处理",
+        "createdAt": "2026-06-17T10:22:49.431Z",
+        "createdBy": "user_system"
+      }
+    ],
+    "retests": [
+      {
+        "id": "retest_demo",
+        "clockId": "clock_demo",
+        "adjustmentId": "adjustment_demo",
+        "testedAt": "2026-06-17T10:22:49.431Z",
+        "dailyRateSeconds": 31,
+        "amplitude": 248,
+        "qualified": false,
+        "note": "仍偏快，振幅尚可",
+        "createdBy": "user_system"
+      }
+    ],
+    "handovers": [
+      {
+        "id": "handover_demo",
+        "clockId": "clock_demo",
+        "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
+        "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
+        "receiver": "王师傅",
+        "createdAt": "2026-06-17T10:22:49.431Z",
+        "createdBy": "user_system",
+        "receiverId": "user_tech_wang",
+        "previousTechnicianId": "user_system",
+        "previousTechnicianName": "系统"
+      }
+    ],
+    "retestTasks": [
+      {
+        "id": "retestTask_demo",
+        "clockId": "clock_demo",
+        "adjustmentId": "adjustment_demo",
+        "plannedRetestAt": "2026-06-24T10:22:49.431Z",
+        "priority": "medium",
+        "status": "pending",
+        "completedAt": null,
+        "completedRetestId": null,
+        "cancelledAt": null,
+        "cancelledBy": null,
+        "cancelReason": null,
+        "note": "调校后一周复测",
+        "createdAt": "2026-06-17T10:22:49.431Z",
+        "createdBy": "user_system"
+      }
+    ],
+    "suggestions": [],
+    "healthScoreRules": [],
+    "auditLogs": [
+      {
+        "id": "audit_demo",
+        "operationType": "clock_create",
+        "resourceType": "clock",
+        "resourceId": "clock_demo",
+        "clockId": "clock_demo",
+        "beforeSnapshot": null,
+        "afterSnapshot": {
+          "id": "clock_demo",
+          "code": "CLK-1890-07",
+          "escapementType": "瑞士杠杆式",
+          "balanceFrequency": "18000vph",
+          "targetDailyRateSeconds": 20,
+          "note": "怀表机芯，走时偏快"
+        },
+        "changedFields": null,
+        "summary": "创建钟表档案 CLK-1890-07",
+        "createdAt": "2026-06-17T10:22:49.431Z",
+        "createdBy": "user_system"
+      }
+    ]
+  }
+}

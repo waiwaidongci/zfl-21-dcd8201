@@ -121,6 +121,36 @@
       "summary": "创建钟表档案 CLK-1890-07",
       "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system"
+    },
+    {
+      "id": "audit_mqhyli2i_jv45sc",
+      "operationType": "backup_restore",
+      "resourceType": "backup",
+      "resourceId": "backup_20260617_185728_340",
+      "clockId": null,
+      "beforeSnapshot": {
+        "id": "backup_20260617_185728_340"
+      },
+      "afterSnapshot": {
+        "id": "backup_20260617_185728_340",
+        "restoredAt": "2026-06-17T10:59:45.971Z",
+        "counts": {
+          "users": 4,
+          "clocks": 1,
+          "adjustments": 1,
+          "retests": 1,
+          "handovers": 1,
+          "retestTasks": 1,
+          "suggestions": 0,
+          "auditLogs": 1,
+          "healthScoreRules": 0
+        },
+        "tokenVerified": false
+      },
+      "changedFields": null,
+      "summary": "恢复数据备份 backup_20260617_185728_340",
+      "createdAt": "2026-06-17T10:59:45.978Z",
+      "createdBy": "user_admin_default"
     }
   ]
 }

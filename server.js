@@ -1,4 +1,5 @@
 const http = require("http");
+const crypto = require("crypto");
 const { readFile, writeFile, mkdir, readdir, stat, unlink, rename } = require("fs/promises");
 const path = require("path");
 
@@ -173,6 +174,7 @@ const AUDIT_OPERATION_TYPES = {
   USER_DELETE: "user_delete",
   BACKUP_CREATE: "backup_create",
   BACKUP_RESTORE: "backup_restore",
+  BACKUP_PREVIEW: "backup_preview",
   WORKFLOW_ARCHIVE: "workflow_archive"
 };
 
@@ -393,6 +395,31 @@ const BACKUP_KEY_FIELDS = [
   "counts"
 ];
 
+const BACKUP_DIFF_COLLECTIONS = [
+  "users",
+  "clocks",
+  "adjustments",
+  "retests",
+  "handovers",
+  "retestTasks",
+  "suggestions",
+  "auditLogs"
+];
+
+const BACKUP_DIFF_KEY_FIELDS = {
+  users: ["id", "username", "name", "role"],
+  clocks: ["id", "code", "escapementType", "balanceFrequency", "targetDailyRateSeconds", "assignedTechnicianId"],
+  adjustments: ["id", "clockId", "currentDailyRateSeconds", "direction", "amount"],
+  retests: ["id", "clockId", "dailyRateSeconds", "amplitude", "qualified"],
+  handovers: ["id", "clockId", "receiver", "handoverNote"],
+  retestTasks: ["id", "clockId", "priority", "status", "plannedRetestAt"],
+  suggestions: ["id", "clockId", "status", "suggestedDirection"],
+  auditLogs: ["id", "operationType", "resourceType", "resourceId", "summary"]
+};
+
+const CONFIRMATION_TOKEN_SECRET = process.env.CONFIRMATION_TOKEN_SECRET || "clock_escapement_backup_token";
+const CONFIRMATION_TOKEN_TTL_MS = 10 * 60 * 1000;
+
 const WORKFLOW_KEY_FIELDS = [
   "workflowArchived",
   "workflowArchivedAt",
@@ -450,6 +477,7 @@ const routes = [
   "POST /backups",
   "GET /backups",
   "GET /backups/:id/validate",
+  "POST /backups/:id/preview",
   "POST /backups/:id/restore"
 ];
 
@@ -785,6 +813,169 @@ function createBackupError(code, message) {
   return error;
 }
 
+async function computeBackupFileHash(filePath) {
+  const content = await readFile(filePath, "utf8");
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function generateConfirmationToken(backupId, fileHash) {
+  const issuedAt = Date.now();
+  const payload = JSON.stringify({ backupId, fileHash, issuedAt });
+  const signature = crypto
+    .createHmac("sha256", CONFIRMATION_TOKEN_SECRET)
+    .update(payload)
+    .digest("hex");
+  return Buffer.from(JSON.stringify({ backupId, fileHash, issuedAt, signature })).toString("base64url");
+}
+
+function verifyConfirmationToken(token, backupId, currentFileHash) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+  } catch {
+    const error = new Error("确认令牌格式无效");
+    error.status = 400;
+    error.code = "INVALID_TOKEN";
+    throw error;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", CONFIRMATION_TOKEN_SECRET)
+    .update(JSON.stringify({ backupId: parsed.backupId, fileHash: parsed.fileHash, issuedAt: parsed.issuedAt }))
+    .digest("hex");
+
+  if (parsed.signature !== expectedSignature) {
+    const error = new Error("确认令牌签名不匹配，令牌可能已被篡改");
+    error.status = 400;
+    error.code = "TOKEN_SIGNATURE_MISMATCH";
+    throw error;
+  }
+
+  if (parsed.backupId !== backupId) {
+    const error = new Error("确认令牌与当前备份不匹配");
+    error.status = 400;
+    error.code = "TOKEN_BACKUP_MISMATCH";
+    throw error;
+  }
+
+  if (parsed.fileHash !== currentFileHash) {
+    const error = new Error("备份文件自预览后已发生变化，请重新预览");
+    error.status = 400;
+    error.code = "BACKUP_FILE_CHANGED";
+    throw error;
+  }
+
+  if (Date.now() - parsed.issuedAt > CONFIRMATION_TOKEN_TTL_MS) {
+    const error = new Error("确认令牌已过期，请重新预览");
+    error.status = 400;
+    error.code = "TOKEN_EXPIRED";
+    throw error;
+  }
+
+  return true;
+}
+
+function diffCollection(currentItems, backupItems, keyFields) {
+  const currentMap = new Map();
+  const backupMap = new Map();
+  for (const item of currentItems) {
+    if (item.id) currentMap.set(item.id, item);
+  }
+  for (const item of backupItems) {
+    if (item.id) backupMap.set(item.id, item);
+  }
+
+  const onlyInCurrent = [];
+  const onlyInBackup = [];
+  const modified = [];
+  const unchanged = [];
+
+  for (const [id, currentItem] of currentMap) {
+    if (!backupMap.has(id)) {
+      onlyInCurrent.push(extractKeyFields(currentItem, keyFields));
+    } else {
+      const backupItem = backupMap.get(id);
+      const currentKey = extractKeyFields(currentItem, keyFields);
+      const backupKey = extractKeyFields(backupItem, keyFields);
+      if (JSON.stringify(currentKey) !== JSON.stringify(backupKey)) {
+        modified.push({
+          id,
+          current: currentKey,
+          backup: backupKey,
+          changedFields: summarizeFieldChanges(backupKey, currentKey, keyFields.filter((f) => keyFields.includes(f)))
+        });
+      } else {
+        unchanged.push(id);
+      }
+    }
+  }
+
+  for (const [id, backupItem] of backupMap) {
+    if (!currentMap.has(id)) {
+      onlyInBackup.push(extractKeyFields(backupItem, keyFields));
+    }
+  }
+
+  return {
+    currentCount: currentItems.length,
+    backupCount: backupItems.length,
+    countDiff: currentItems.length - backupItems.length,
+    onlyInCurrent,
+    onlyInBackup,
+    modified,
+    unchangedCount: unchanged.length
+  };
+}
+
+async function previewBackupDiff(backupId) {
+  await ensureBackupDir();
+  const filePath = getBackupFilePath(backupId);
+  let rawContent;
+  try {
+    rawContent = await readFile(filePath, "utf8");
+  } catch {
+    throw createBackupError(BACKUP_ERROR_CODES.BACKUP_NOT_FOUND, `备份不存在: ${backupId}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(rawContent);
+  } catch {
+    throw createBackupError(BACKUP_ERROR_CODES.JSON_CORRUPTED, `备份文件 JSON 格式损坏: ${backupId}`);
+  }
+  if (!parsed.data) {
+    throw createBackupError(BACKUP_ERROR_CODES.SCHEMA_INVALID, `备份缺少 data 字段: ${backupId}`);
+  }
+  const schemaErrors = validateDbSchema(parsed.data);
+  if (schemaErrors.length > 0) {
+    const error = createBackupError(BACKUP_ERROR_CODES.SCHEMA_INVALID, `备份数据结构不符合预期: ${schemaErrors.join("; ")}`);
+    error.details = schemaErrors;
+    throw error;
+  }
+
+  const currentDb = await readDb();
+  const fileHash = await computeBackupFileHash(filePath);
+  const collectionDiffs = {};
+
+  for (const collectionName of BACKUP_DIFF_COLLECTIONS) {
+    const currentItems = Array.isArray(currentDb[collectionName]) ? currentDb[collectionName] : [];
+    const backupItems = Array.isArray(parsed.data[collectionName]) ? parsed.data[collectionName] : [];
+    const keyFields = BACKUP_DIFF_KEY_FIELDS[collectionName] || ["id"];
+    collectionDiffs[collectionName] = diffCollection(currentItems, backupItems, keyFields);
+  }
+
+  const confirmationToken = generateConfirmationToken(backupId, fileHash);
+  const tokenExpiresAt = new Date(Date.now() + CONFIRMATION_TOKEN_TTL_MS).toISOString();
+
+  return {
+    backupId,
+    backupCreatedAt: parsed.meta?.createdAt || null,
+    previewedAt: new Date().toISOString(),
+    collectionDiffs,
+    confirmationToken,
+    tokenExpiresAt
+  };
+}
+
 async function createBackup() {
   await ensureBackupDir();
   const db = await readDb();
@@ -909,9 +1100,15 @@ async function validateBackup(backupId) {
   };
 }
 
-async function restoreBackup(backupId) {
+async function restoreBackup(backupId, confirmationToken) {
   const validation = await validateBackup(backupId);
   const filePath = getBackupFilePath(backupId);
+
+  if (confirmationToken) {
+    const currentFileHash = await computeBackupFileHash(filePath);
+    verifyConfirmationToken(confirmationToken, backupId, currentFileHash);
+  }
+
   const rawContent = await readFile(filePath, "utf8");
   const parsed = JSON.parse(rawContent);
   const currentDbRaw = await readFile(DB_FILE, "utf8");
@@ -934,7 +1131,8 @@ async function restoreBackup(backupId) {
       restored: true,
       backupId,
       restoredAt: new Date().toISOString(),
-      counts: validation.counts
+      counts: validation.counts,
+      tokenVerified: !!confirmationToken
     };
   } catch (writeErr) {
     try {
@@ -1299,6 +1497,8 @@ function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSna
       return `删除用户 ${beforeSnapshot?.username || ""}（${beforeSnapshot?.name || ""}）`;
     case AUDIT_OPERATION_TYPES.BACKUP_CREATE:
       return `创建数据备份 ${afterSnapshot?.id || ""}`;
+    case AUDIT_OPERATION_TYPES.BACKUP_PREVIEW:
+      return `预览备份差异 ${afterSnapshot?.id || ""}`;
     case AUDIT_OPERATION_TYPES.BACKUP_RESTORE:
       return `恢复数据备份 ${beforeSnapshot?.id || afterSnapshot?.id || ""}`;
     case AUDIT_OPERATION_TYPES.WORKFLOW_ARCHIVE:
@@ -4210,11 +4410,44 @@ async function handle(req, res) {
     return send(res, 200, { data: result });
   }
 
+  const previewBackupMatch = pathname.match(/^\/backups\/([^/]+)\/preview$/);
+  if (previewBackupMatch && req.method === "POST") {
+    requireAdmin(req, db);
+    const backupId = previewBackupMatch[1];
+    const result = await previewBackupDiff(backupId);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.BACKUP_PREVIEW,
+      resourceType: AUDIT_RESOURCE_TYPES.BACKUP,
+      resourceId: backupId,
+      clockId: null,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: backupId,
+        previewedAt: result.previewedAt,
+        collectionSummary: Object.fromEntries(
+          BACKUP_DIFF_COLLECTIONS.map((c) => [c, {
+            currentCount: result.collectionDiffs[c].currentCount,
+            backupCount: result.collectionDiffs[c].backupCount,
+            countDiff: result.collectionDiffs[c].countDiff
+          }])
+        )
+      },
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+    await writeDb(db);
+
+    return send(res, 200, { data: result });
+  }
+
   const restoreBackupMatch = pathname.match(/^\/backups\/([^/]+)\/restore$/);
   if (restoreBackupMatch && req.method === "POST") {
     requireAdmin(req, db);
     const backupId = restoreBackupMatch[1];
-    const result = await restoreBackup(backupId);
+    const body = await parseBody(req);
+    const confirmationToken = body.confirmationToken || null;
+    const result = await restoreBackup(backupId, confirmationToken);
 
     const restoredDb = await readDb();
     createAuditLog(restoredDb, {
@@ -4228,7 +4461,8 @@ async function handle(req, res) {
       afterSnapshot: {
         id: backupId,
         restoredAt: result.restoredAt,
-        counts: result.counts
+        counts: result.counts,
+        tokenVerified: result.tokenVerified
       },
       changedFields: null,
       createdBy: currentUser.id
