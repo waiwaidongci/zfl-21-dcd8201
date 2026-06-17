@@ -1587,27 +1587,49 @@ function migrateDbAddRetestTaskCancelFields(db) {
 function migrateDbAddHandoverFields(db) {
   let changed = false;
   if (db.handovers) {
+    const clocksHandovers = {};
     for (const item of db.handovers) {
-      if (!item.receiverId) {
-        const receiverUser = db.users.find((u) => u.name === item.receiver || u.username === item.receiver);
-        if (receiverUser) {
-          item.receiverId = receiverUser.id;
-        } else {
-          item.receiverId = null;
-        }
-        changed = true;
+      if (!clocksHandovers[item.clockId]) clocksHandovers[item.clockId] = [];
+      clocksHandovers[item.clockId].push(item);
+    }
+    for (const [clockId, items] of Object.entries(clocksHandovers)) {
+      items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      const clock = db.clocks.find((c) => c.id === clockId);
+      let lastReceiverId = clock ? (clock.createdBy || clock.assignedTechnicianId || null) : null;
+      let lastReceiverName = null;
+      if (lastReceiverId) {
+        const u = db.users.find((usr) => usr.id === lastReceiverId);
+        lastReceiverName = u ? u.name : null;
       }
-      if (!item.previousTechnicianId) {
-        const clock = db.clocks.find((c) => c.id === item.clockId);
-        if (clock) {
-          item.previousTechnicianId = null;
-          const previousUser = db.users.find((u) => u.id === clock.assignedTechnicianId);
-          item.previousTechnicianName = previousUser ? previousUser.name : "";
-        } else {
-          item.previousTechnicianId = null;
-          item.previousTechnicianName = "";
+      for (let i = 0; i < items.length; i++) {
+        const h = items[i];
+        let hChanged = false;
+        if (!h.receiverId) {
+          const receiverUser = db.users.find((u) => u.name === h.receiver || u.username === h.receiver);
+          if (receiverUser) {
+            h.receiverId = receiverUser.id;
+          } else {
+            h.receiverId = null;
+          }
+          hChanged = true;
         }
-        changed = true;
+        if (!h.previousTechnicianId || h.previousTechnicianId === null) {
+          h.previousTechnicianId = lastReceiverId;
+          hChanged = true;
+        }
+        if (h.previousTechnicianId && (!h.previousTechnicianName || h.previousTechnicianName === "")) {
+          const prevUser = db.users.find((u) => u.id === h.previousTechnicianId);
+          if (prevUser) {
+            h.previousTechnicianName = prevUser.name;
+            hChanged = true;
+          }
+        }
+        if (hChanged) changed = true;
+        if (h.receiverId) {
+          lastReceiverId = h.receiverId;
+          const u = db.users.find((usr) => usr.id === h.receiverId);
+          lastReceiverName = u ? u.name : h.receiver || null;
+        }
       }
     }
   }
@@ -2923,25 +2945,68 @@ async function handle(req, res) {
         throw error;
       }
     }
-    const data = listHandovers(db, clock.id).map((h) => {
-      const enriched = enrichWithCreator(db, h);
+    const allClockHandovers = listHandovers(db, clock.id).slice().reverse();
+
+    const initialOwnerId = clock.createdBy || clock.assignedTechnicianId || null;
+    const initialOwnerUser = initialOwnerId ? db.users.find((u) => u.id === initialOwnerId) : null;
+    let prevTechId = initialOwnerId;
+    let prevTechName = initialOwnerUser ? initialOwnerUser.name : (initialOwnerId ? "" : "");
+
+    for (const h of allClockHandovers) {
+      const resolvedPrevId = h.previousTechnicianId;
+      const resolvedPrevUser = resolvedPrevId ? db.users.find((u) => u.id === resolvedPrevId) : null;
+      h._resolvedPreviousTechnicianId = resolvedPrevId || prevTechId;
+      h._resolvedPreviousTechnicianName = resolvedPrevUser?.name || h.previousTechnicianName || prevTechName || "（初始）";
       const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
-      if (receiverUser) {
-        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
+      h._resolvedReceiverId = h.receiverId || null;
+      h._resolvedReceiverName = receiverUser?.name || h.receiver || "";
+      if (h._resolvedReceiverId) {
+        prevTechId = h._resolvedReceiverId;
+        prevTechName = h._resolvedReceiverName;
       }
-      const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
-      if (previousUser) {
-        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
-      }
-      return enriched;
-    });
+    }
+
+    const data = allClockHandovers
+      .slice()
+      .reverse()
+      .map((h) => {
+        const enriched = enrichWithCreator(db, h);
+        const receiverUser = h._resolvedReceiverId ? db.users.find((u) => u.id === h._resolvedReceiverId) : null;
+        if (receiverUser) {
+          enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
+        } else if (h._resolvedReceiverName) {
+          enriched.receiverUser = { id: null, name: h._resolvedReceiverName, role: null };
+        }
+        const previousUser = h._resolvedPreviousTechnicianId ? db.users.find((u) => u.id === h._resolvedPreviousTechnicianId) : null;
+        enriched.previousTechnicianId = h._resolvedPreviousTechnicianId;
+        enriched.previousTechnicianName = h._resolvedPreviousTechnicianName;
+        if (previousUser) {
+          enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
+        } else if (h._resolvedPreviousTechnicianName && h._resolvedPreviousTechnicianName !== "（初始）") {
+          enriched.previousTechnicianUser = { id: null, name: h._resolvedPreviousTechnicianName, role: null };
+        }
+        delete enriched._resolvedPreviousTechnicianId;
+        delete enriched._resolvedPreviousTechnicianName;
+        delete enriched._resolvedReceiverId;
+        delete enriched._resolvedReceiverName;
+        return enriched;
+      });
     return send(res, 200, { data, total: data.length });
   }
 
   const handoverCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverCreateMatch && req.method === "POST") {
-    requireAdmin(req, db);
+    requireAuth(req, db);
     const clock = findClock(db, handoverCreateMatch[1]);
+
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      if (clock.assignedTechnicianId !== currentUser.id) {
+        const error = new Error("普通技师只能为自己当前负责的钟表发起交接");
+        error.status = 403;
+        error.code = "FORBIDDEN";
+        throw error;
+      }
+    }
     const body = await parseBody(req);
     required(body, ["handoverNote", "receiver"]);
 
@@ -3045,26 +3110,65 @@ async function handle(req, res) {
       }
     }
 
-    const handoverEvents = db.handovers
+    const allClockHandovers = db.handovers
       .filter((h) => h.clockId === clock.id)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+    const initialOwnerId = clock.createdBy || clock.assignedTechnicianId || null;
+    const initialOwnerUser = initialOwnerId ? db.users.find((u) => u.id === initialOwnerId) : null;
+    let prevTechId = initialOwnerId;
+    let prevTechName = initialOwnerUser ? initialOwnerUser.name : (initialOwnerId ? "" : "");
+
+    for (const h of allClockHandovers) {
+      const resolvedPrevId = h.previousTechnicianId;
+      const resolvedPrevUser = resolvedPrevId ? db.users.find((u) => u.id === resolvedPrevId) : null;
+      const computedPrevName = resolvedPrevUser ? resolvedPrevUser.name : (h.previousTechnicianName || (prevTechName || ""));
+
+      if (resolvedPrevId) {
+        h._resolvedPreviousTechnicianId = resolvedPrevId;
+        h._resolvedPreviousTechnicianName = computedPrevName;
+      } else {
+        h._resolvedPreviousTechnicianId = prevTechId;
+        h._resolvedPreviousTechnicianName = prevTechName;
+      }
+
+      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
+      if (receiverUser) {
+        h._resolvedReceiverId = receiverUser.id;
+        h._resolvedReceiverName = receiverUser.name;
+      } else {
+        h._resolvedReceiverId = h.receiverId || null;
+        h._resolvedReceiverName = h.receiver || "";
+      }
+
+      if (h._resolvedReceiverId) {
+        prevTechId = h._resolvedReceiverId;
+        prevTechName = h._resolvedReceiverName;
+      }
+    }
+
+    const handoverEvents = allClockHandovers
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .map((h) => {
         const creator = db.users.find((u) => u.id === h.createdBy) || null;
-        const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
-        const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
+        const receiverUser = h._resolvedReceiverId ? db.users.find((u) => u.id === h._resolvedReceiverId) : null;
+        const previousUser = h._resolvedPreviousTechnicianId ? db.users.find((u) => u.id === h._resolvedPreviousTechnicianId) : null;
+        const prevNameDisplay = h._resolvedPreviousTechnicianName || previousUser?.name || "（初始）";
+        const receiverNameDisplay = h._resolvedReceiverName || receiverUser?.name || h.receiver || "无";
         return {
           id: h.id,
           type: "handover",
           timestamp: h.createdAt,
-          summary: `${previousUser ? previousUser.name : "无"} → ${h.receiver || "无"}`,
+          summary: `${prevNameDisplay} → ${receiverNameDisplay}`,
           detail: {
             handoverNote: h.handoverNote,
             nextStepSuggestion: h.nextStepSuggestion,
-            receiver: h.receiver,
-            receiverId: h.receiverId,
-            receiverUser: receiverUser ? { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role } : null,
-            previousTechnicianName: h.previousTechnicianName || previousUser?.name || "",
-            previousTechnicianId: h.previousTechnicianId,
-            previousTechnicianUser: previousUser ? { id: previousUser.id, name: previousUser.name, role: previousUser.role } : null,
+            receiver: receiverNameDisplay,
+            receiverId: h._resolvedReceiverId,
+            receiverUser: receiverUser ? { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role } : (h._resolvedReceiverName ? { id: null, name: h._resolvedReceiverName, role: null } : null),
+            previousTechnicianName: prevNameDisplay,
+            previousTechnicianId: h._resolvedPreviousTechnicianId,
+            previousTechnicianUser: previousUser ? { id: previousUser.id, name: previousUser.name, role: previousUser.role } : (prevNameDisplay && prevNameDisplay !== "（初始）" ? { id: null, name: prevNameDisplay, role: null } : null),
             creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
           }
         };

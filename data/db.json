@@ -37,10 +37,10 @@
       "balanceFrequency": "18000vph",
       "targetDailyRateSeconds": 20,
       "note": "怀表机芯，走时偏快",
-      "assignedTechnicianId": "user_tech_zhang",
+      "assignedTechnicianId": "user_tech_wang",
       "createdAt": "2026-06-16T00:00:00.000Z",
       "createdBy": "user_system",
-      "updatedAt": "2026-06-17T06:08:25.467Z"
+      "updatedAt": "2026-06-17T06:27:31.738Z"
     },
     {
       "id": "clock_mqgsbyvj_tr66gb",
@@ -122,7 +122,7 @@
       "createdAt": "2026-06-16T00:00:00.000Z",
       "createdBy": "user_system",
       "receiverId": "user_tech_wang",
-      "previousTechnicianId": null,
+      "previousTechnicianId": "user_system",
       "previousTechnicianName": "张师傅"
     },
     {
@@ -136,6 +136,18 @@
       "previousTechnicianName": "管理员",
       "createdAt": "2026-06-17T06:08:25.467Z",
       "createdBy": "user_admin_default"
+    },
+    {
+      "id": "handover_mqhovehm_920qcc",
+      "clockId": "clock_demo",
+      "handoverNote": "张师傅完成初步调校，建议接手人复测游丝",
+      "nextStepSuggestion": "先看走时稳定性，再检查游丝外桩",
+      "receiver": "王师傅",
+      "receiverId": "user_tech_wang",
+      "previousTechnicianId": "user_tech_zhang",
+      "previousTechnicianName": "张师傅",
+      "createdAt": "2026-06-17T06:27:31.738Z",
+      "createdBy": "user_tech_zhang"
     }
   ],
   "retestTasks": [
@@ -272,6 +284,52 @@
       "summary": "负责人变更：管理员 → 张师傅",
       "createdAt": "2026-06-17T06:08:25.467Z",
       "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqhovehm_4kt8kr",
+      "operationType": "technician_assign",
+      "resourceType": "clock",
+      "resourceId": "clock_demo",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "technicianId": "user_tech_zhang",
+        "technicianName": "张师傅"
+      },
+      "afterSnapshot": {
+        "technicianId": "user_tech_wang",
+        "technicianName": "王师傅"
+      },
+      "changedFields": [
+        {
+          "field": "assignedTechnicianId",
+          "before": "user_tech_zhang",
+          "after": "user_tech_wang"
+        }
+      ],
+      "summary": "负责人变更：张师傅 → 王师傅",
+      "createdAt": "2026-06-17T06:27:31.738Z",
+      "createdBy": "user_tech_zhang"
+    },
+    {
+      "id": "audit_mqhovehm_ql6gpk",
+      "operationType": "handover_create",
+      "resourceType": "handover",
+      "resourceId": "handover_mqhovehm_920qcc",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "previousTechnicianId": "user_tech_zhang",
+        "previousTechnicianName": "张师傅"
+      },
+      "afterSnapshot": {
+        "receiverId": "user_tech_wang",
+        "receiverName": "王师傅",
+        "handoverNote": "张师傅完成初步调校，建议接手人复测游丝",
+        "nextStepSuggestion": "先看走时稳定性，再检查游丝外桩"
+      },
+      "changedFields": null,
+      "summary": "交接记录：王师傅 接手，备注：张师傅完成初步调校，建议接手人复测游丝",
+      "createdAt": "2026-06-17T06:27:31.738Z",
+      "createdBy": "user_tech_zhang"
     }
   ]
 }

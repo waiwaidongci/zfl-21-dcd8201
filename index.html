@@ -267,11 +267,12 @@ async function loadHandoverTab() {
       try {
         const res = await api(`/clocks/${clock.id}/handovers`);
         const handovers = res.data || [];
+        const canInitiate = isAdmin || clock.assignedTechnician?.id === currentUser.id;
         html += `
           <div class="card">
             <div class="card-title">
               ${clock.code} - 交接记录 (${handovers.length})
-              ${isAdmin ? `<button class="btn btn-primary" style="float:right;font-size:12px;padding:4px 12px;" onclick="openHandoverModal('${clock.id}','${clock.code}')">+ 新建交接</button>` : ''}
+              ${canInitiate ? `<button class="btn btn-primary" style="float:right;font-size:12px;padding:4px 12px;" onclick="openHandoverModal('${clock.id}','${clock.code}')">+ 新建交接</button>` : ''}
             </div>
             ${handovers.length === 0 ? '<div class="empty-state">暂无交接记录</div>' : `
               <table>
