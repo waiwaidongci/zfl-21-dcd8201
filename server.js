@@ -4021,8 +4021,31 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      const curStatus = deriveWorkflowStatus(db, clock.id);
+      let evtType = WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST;
+      if (curStatus === WORKFLOW_STATUSES.CREATED) {
+        evtType = WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED;
+      } else if (curStatus === WORKFLOW_STATUSES.RETEST_FAILED) {
+        evtType = WORKFLOW_EVENT_TYPES.REWORKED;
+      } else if (curStatus === WORKFLOW_STATUSES.ARCHIVED) {
+        evtType = WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK;
+      }
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: evtType,
+        occurredAt: adjustment.createdAt,
+        createdBy: currentUser.id,
+        note: adjustment.note,
+        relatedAdjustmentId: adjustment.id,
+        meta: { source: "generic_adjustment", statusBefore: curStatus }
+      });
+    } catch (_) {}
     await writeDb(db);
-    return send(res, 201, { data: enrichWithCreator(db, adjustment) });
+    return send(res, 201, {
+      data: enrichWithCreator(db, adjustment),
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
   }
 
   const retestMatch = pathname.match(/^\/clocks\/([^/]+)\/retests$/);
@@ -4091,6 +4114,38 @@ async function handle(req, res) {
       },
       changedFields: null
     });
+    try {
+      const curStatus = deriveWorkflowStatus(db, clock.id);
+      if (curStatus === WORKFLOW_STATUSES.ARCHIVED) {
+        recordWorkflowEvent(db, {
+          clockId: clock.id,
+          eventType: WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK,
+          occurredAt: new Date(Date.now() - 1).toISOString(),
+          createdBy: currentUser.id,
+          note: "通过普通复测接口自动解档",
+          meta: { source: "generic_retest_unarchive" }
+        });
+      }
+      const evtType = retest.qualified
+        ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
+        : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: evtType,
+        occurredAt: retest.testedAt,
+        createdBy: currentUser.id,
+        note: retest.note,
+        relatedAdjustmentId: retest.adjustmentId,
+        relatedRetestId: retest.id,
+        meta: {
+          source: "generic_retest",
+          statusBefore: curStatus,
+          qualified: retest.qualified,
+          dailyRateSeconds: retest.dailyRateSeconds,
+          amplitude: retest.amplitude
+        }
+      });
+    } catch (_) {}
     if (db.retestTasks) {
       let matchingTask = targetTask;
       if (!matchingTask) {
@@ -4117,7 +4172,11 @@ async function handle(req, res) {
       }
     }
     await writeDb(db);
-    return send(res, 201, { data: enrichWithCreator(db, retest), clock: clockSummary(db, clock) });
+    return send(res, 201, {
+      data: enrichWithCreator(db, retest),
+      clock: clockSummary(db, clock),
+      workflowStatus: buildWorkflowStatusInfo(db, clock.id)
+    });
   }
 
   const latestMatch = pathname.match(/^\/clocks\/([^/]+)\/latest-retest$/);
