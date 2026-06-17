@@ -20,7 +20,8 @@ const DB_SCHEMA = {
   handovers: "array",
   retestTasks: "array",
   suggestions: "array",
-  auditLogs: "array"
+  auditLogs: "array",
+  healthScoreRules: "array"
 };
 
 const USER_ROLES = {
@@ -130,6 +131,7 @@ const initialData = {
     }
   ],
   suggestions: [],
+  healthScoreRules: [],
   auditLogs: [
     {
       id: "audit_demo",
@@ -438,6 +440,68 @@ const HEALTH_SCORE_RULES = {
     insufficient: "数据不足"
   }
 };
+
+const DEFAULT_HEALTH_SCORE_RULES_VERSION = "default";
+const DEFAULT_HEALTH_SCORE_RULES_SOURCE = "system_default";
+
+function getHealthScoreRulesForEscapement(db, escapementType) {
+  const rules = db.healthScoreRules || [];
+  const matched = rules.find(
+    (r) => r.escapementType && r.escapementType.trim() === escapementType?.trim() && r.enabled !== false
+  );
+  if (matched) {
+    return {
+      rules: matched.rules,
+      version: matched.version,
+      source: "custom",
+      ruleId: matched.id,
+      escapementType: matched.escapementType
+    };
+  }
+  return {
+    rules: HEALTH_SCORE_RULES,
+    version: DEFAULT_HEALTH_SCORE_RULES_VERSION,
+    source: DEFAULT_HEALTH_SCORE_RULES_SOURCE,
+    ruleId: null,
+    escapementType: null
+  };
+}
+
+function validateHealthScoreRulesConfig(rules) {
+  const errors = [];
+  if (!rules || typeof rules !== "object") {
+    return ["规则配置必须是对象"];
+  }
+  if (typeof rules.recentRetestCount !== "number" || rules.recentRetestCount < 1) {
+    errors.push("recentRetestCount 必须是大于0的数字");
+  }
+  if (typeof rules.minRetestCount !== "number" || rules.minRetestCount < 1) {
+    errors.push("minRetestCount 必须是大于0的数字");
+  }
+  if (!rules.weights || typeof rules.weights !== "object") {
+    errors.push("weights 必须是对象");
+  } else {
+    if (typeof rules.weights.dailyRateStability !== "number") errors.push("weights.dailyRateStability 必须是数字");
+    if (typeof rules.weights.amplitudeStability !== "number") errors.push("weights.amplitudeStability 必须是数字");
+    if (typeof rules.weights.consecutiveQualified !== "number") errors.push("weights.consecutiveQualified 必须是数字");
+  }
+  if (!rules.dailyRate || typeof rules.dailyRate !== "object") {
+    errors.push("dailyRate 必须是对象");
+  }
+  if (!rules.amplitude || typeof rules.amplitude !== "object") {
+    errors.push("amplitude 必须是对象");
+  }
+  if (!rules.consecutive || typeof rules.consecutive !== "object") {
+    errors.push("consecutive 必须是对象");
+  }
+  if (!rules.thresholds || typeof rules.thresholds !== "object") {
+    errors.push("thresholds 必须是对象");
+  }
+  if (!rules.conclusions || typeof rules.conclusions !== "object") {
+    errors.push("conclusions 必须是对象");
+  }
+  return errors;
+}
 
 const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
 
@@ -1223,8 +1287,8 @@ function listAllAuditLogs(db) {
     .map((log) => enrichAuditLog(db, log));
 }
 
-function getRecentRetests(db, clockId) {
-  const count = HEALTH_SCORE_RULES.recentRetestCount;
+function getRecentRetests(db, clockId, rules) {
+  const count = rules ? rules.recentRetestCount : HEALTH_SCORE_RULES.recentRetestCount;
   return db.retests
     .filter((item) => item.clockId === clockId)
     .sort((a, b) => new Date(b.testedAt) - new Date(a.testedAt))
@@ -1240,45 +1304,45 @@ function calculateStdDev(values) {
   return Math.sqrt(variance);
 }
 
-function calculateDailyRateScore(retests) {
+function calculateDailyRateScore(retests, rules) {
   const dailyRates = retests.map((r) => r.dailyRateSeconds);
   const stdDev = calculateStdDev(dailyRates);
-  const rules = HEALTH_SCORE_RULES.dailyRate;
+  const dailyRateRules = rules ? rules.dailyRate : HEALTH_SCORE_RULES.dailyRate;
 
-  if (stdDev <= rules.excellentStdDev) {
-    return { score: rules.excellentScore, stdDev, level: "excellent" };
-  } else if (stdDev <= rules.goodStdDev) {
-    return { score: rules.goodScore, stdDev, level: "good" };
-  } else if (stdDev <= rules.fairStdDev) {
-    return { score: rules.fairScore, stdDev, level: "fair" };
+  if (stdDev <= dailyRateRules.excellentStdDev) {
+    return { score: dailyRateRules.excellentScore, stdDev, level: "excellent" };
+  } else if (stdDev <= dailyRateRules.goodStdDev) {
+    return { score: dailyRateRules.goodScore, stdDev, level: "good" };
+  } else if (stdDev <= dailyRateRules.fairStdDev) {
+    return { score: dailyRateRules.fairScore, stdDev, level: "fair" };
   }
-  return { score: rules.poorScore, stdDev, level: "poor" };
+  return { score: dailyRateRules.poorScore, stdDev, level: "poor" };
 }
 
-function calculateAmplitudeScore(retests) {
+function calculateAmplitudeScore(retests, rules) {
   const amplitudes = retests.map((r) => r.amplitude);
   const stdDev = calculateStdDev(amplitudes);
-  const rules = HEALTH_SCORE_RULES.amplitude;
+  const amplitudeRules = rules ? rules.amplitude : HEALTH_SCORE_RULES.amplitude;
 
   let baseScore;
   let level;
-  if (stdDev <= rules.excellentStdDev) {
-    baseScore = rules.excellentScore;
+  if (stdDev <= amplitudeRules.excellentStdDev) {
+    baseScore = amplitudeRules.excellentScore;
     level = "excellent";
-  } else if (stdDev <= rules.goodStdDev) {
-    baseScore = rules.goodScore;
+  } else if (stdDev <= amplitudeRules.goodStdDev) {
+    baseScore = amplitudeRules.goodScore;
     level = "good";
-  } else if (stdDev <= rules.fairStdDev) {
-    baseScore = rules.fairScore;
+  } else if (stdDev <= amplitudeRules.fairStdDev) {
+    baseScore = amplitudeRules.fairScore;
     level = "fair";
   } else {
-    baseScore = rules.poorScore;
+    baseScore = amplitudeRules.poorScore;
     level = "poor";
   }
 
   const avgAmplitude = amplitudes.reduce((sum, v) => sum + v, 0) / amplitudes.length;
   const abnormalCount = amplitudes.filter(
-    (a) => a < rules.lowAmplitudeThreshold || a > rules.highAmplitudeThreshold
+    (a) => a < amplitudeRules.lowAmplitudeThreshold || a > amplitudeRules.highAmplitudeThreshold
   ).length;
 
   let abnormalPenalty = 0;
@@ -1295,8 +1359,8 @@ function calculateAmplitudeScore(retests) {
   };
 }
 
-function calculateConsecutiveScore(retests) {
-  const rules = HEALTH_SCORE_RULES.consecutive;
+function calculateConsecutiveScore(retests, rules) {
+  const consecutiveRules = rules ? rules.consecutive : HEALTH_SCORE_RULES.consecutive;
   let consecutiveFailed = 0;
   let maxConsecutiveFailed = 0;
 
@@ -1310,23 +1374,25 @@ function calculateConsecutiveScore(retests) {
   }
 
   if (maxConsecutiveFailed === 0) {
-    return { score: rules.noneFailed, maxConsecutiveFailed, level: "excellent" };
+    return { score: consecutiveRules.noneFailed, maxConsecutiveFailed, level: "excellent" };
   } else if (maxConsecutiveFailed === 1) {
-    return { score: rules.twoFailed, maxConsecutiveFailed, level: "good" };
+    return { score: consecutiveRules.twoFailed, maxConsecutiveFailed, level: "good" };
   } else if (maxConsecutiveFailed === 2) {
-    return { score: rules.twoFailed, maxConsecutiveFailed, level: "fair" };
+    return { score: consecutiveRules.twoFailed, maxConsecutiveFailed, level: "fair" };
   }
-  return { score: rules.threeOrMoreFailed, maxConsecutiveFailed, level: "poor" };
+  return { score: consecutiveRules.threeOrMoreFailed, maxConsecutiveFailed, level: "poor" };
 }
 
 function calculateHealthScore(db, clock) {
-  const recentRetests = getRecentRetests(db, clock.id);
-  const rules = HEALTH_SCORE_RULES;
+  const ruleInfo = getHealthScoreRulesForEscapement(db, clock.escapementType);
+  const rules = ruleInfo.rules;
+  const recentRetests = getRecentRetests(db, clock.id, rules);
 
   if (recentRetests.length < rules.minRetestCount) {
     return {
       clockId: clock.id,
       clockCode: clock.code,
+      escapementType: clock.escapementType,
       totalScore: null,
       conclusion: rules.conclusions.insufficient,
       details: {
@@ -1341,13 +1407,15 @@ function calculateHealthScore(db, clock) {
         qualified: r.qualified
       })),
       calculatedAt: new Date().toISOString(),
-      rulesVersion: "1.0"
+      rulesVersion: ruleInfo.version,
+      rulesSource: ruleInfo.source,
+      ruleId: ruleInfo.ruleId
     };
   }
 
-  const dailyRateResult = calculateDailyRateScore(recentRetests);
-  const amplitudeResult = calculateAmplitudeScore(recentRetests);
-  const consecutiveResult = calculateConsecutiveScore(recentRetests);
+  const dailyRateResult = calculateDailyRateScore(recentRetests, rules);
+  const amplitudeResult = calculateAmplitudeScore(recentRetests, rules);
+  const consecutiveResult = calculateConsecutiveScore(recentRetests, rules);
 
   const totalScore = dailyRateResult.score + amplitudeResult.score + consecutiveResult.score;
 
@@ -1380,6 +1448,7 @@ function calculateHealthScore(db, clock) {
   return {
     clockId: clock.id,
     clockCode: clock.code,
+    escapementType: clock.escapementType,
     totalScore,
     conclusion,
     details: {
@@ -1414,7 +1483,9 @@ function calculateHealthScore(db, clock) {
       qualified: r.qualified
     })),
     calculatedAt: new Date().toISOString(),
-    rulesVersion: "1.0"
+    rulesVersion: ruleInfo.version,
+    rulesSource: ruleInfo.source,
+    ruleId: ruleInfo.ruleId
   };
 }
 
@@ -1696,13 +1767,23 @@ async function ensureDb() {
   const needsMigration1 = migrateDbAddCreatedBy(dbData);
   const needsMigration2 = migrateDbAddRetestTaskCancelFields(dbData);
   const needsMigration3 = migrateDbAddHandoverFields(dbData);
+  const needsMigration4 = migrateDbAddHealthScoreRules(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration1 || needsMigration2 || needsMigration3 || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || needsMigration3 || needsMigration4 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
+}
+
+function migrateDbAddHealthScoreRules(dbData) {
+  let changed = false;
+  if (!dbData.healthScoreRules || !Array.isArray(dbData.healthScoreRules)) {
+    dbData.healthScoreRules = [];
+    changed = true;
+  }
+  return changed;
 }
 
 function getCurrentUser(req, db) {
@@ -1951,6 +2032,161 @@ async function handle(req, res) {
     }
     await writeDb(db);
     return send(res, 200, { data: userSummary(deletedUser) });
+  }
+
+  if (req.method === "GET" && pathname === "/health-score-rules") {
+    requireAuth(req, db);
+    const rules = db.healthScoreRules || [];
+    return send(res, 200, {
+      data: rules,
+      defaultRules: HEALTH_SCORE_RULES,
+      defaultVersion: DEFAULT_HEALTH_SCORE_RULES_VERSION,
+      total: rules.length
+    });
+  }
+
+  const healthScoreRuleDetailMatch = pathname.match(/^\/health-score-rules\/([^/]+)$/);
+  if (healthScoreRuleDetailMatch && req.method === "GET") {
+    requireAuth(req, db);
+    const ruleId = healthScoreRuleDetailMatch[1];
+    if (ruleId === "default") {
+      return send(res, 200, {
+        data: {
+          id: "default",
+          name: "系统默认规则",
+          escapementType: null,
+          version: DEFAULT_HEALTH_SCORE_RULES_VERSION,
+          source: DEFAULT_HEALTH_SCORE_RULES_SOURCE,
+          rules: HEALTH_SCORE_RULES,
+          enabled: true,
+          isDefault: true
+        }
+      });
+    }
+    const rule = (db.healthScoreRules || []).find((r) => r.id === ruleId);
+    if (!rule) {
+      const error = new Error("规则不存在");
+      error.status = 404;
+      throw error;
+    }
+    return send(res, 200, { data: rule });
+  }
+
+  if (req.method === "POST" && pathname === "/health-score-rules") {
+    requireAdmin(req, db);
+    const body = await parseBody(req);
+    required(body, ["name", "escapementType", "version", "rules"]);
+
+    const existingByEscapement = (db.healthScoreRules || []).find(
+      (r) => r.escapementType?.trim() === body.escapementType.trim() && r.enabled !== false
+    );
+    if (existingByEscapement) {
+      const error = new Error(`该擒纵类型已存在规则：${existingByEscapement.name}`);
+      error.status = 400;
+      error.code = "DUPLICATE_ESCAPEMENT_TYPE";
+      throw error;
+    }
+
+    const validationErrors = validateHealthScoreRulesConfig(body.rules);
+    if (validationErrors.length > 0) {
+      const error = new Error(`规则配置无效：${validationErrors.join("；")}`);
+      error.status = 400;
+      error.code = "INVALID_RULES_CONFIG";
+      throw error;
+    }
+
+    const now = new Date().toISOString();
+    const rule = {
+      id: makeId("hsr"),
+      name: body.name,
+      description: body.description || "",
+      escapementType: body.escapementType,
+      version: body.version,
+      rules: body.rules,
+      enabled: body.enabled !== undefined ? Boolean(body.enabled) : true,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: currentUser.id,
+      updatedBy: currentUser.id
+    };
+
+    if (!db.healthScoreRules) db.healthScoreRules = [];
+    db.healthScoreRules.push(rule);
+    await writeDb(db);
+    return send(res, 201, { data: rule });
+  }
+
+  if (healthScoreRuleDetailMatch && req.method === "PUT") {
+    requireAdmin(req, db);
+    const ruleId = healthScoreRuleDetailMatch[1];
+    if (ruleId === "default") {
+      const error = new Error("默认规则不可修改");
+      error.status = 400;
+      throw error;
+    }
+    const rule = (db.healthScoreRules || []).find((r) => r.id === ruleId);
+    if (!rule) {
+      const error = new Error("规则不存在");
+      error.status = 404;
+      throw error;
+    }
+    const body = await parseBody(req);
+
+    if (body.escapementType !== undefined) {
+      const existingByEscapement = (db.healthScoreRules || []).find(
+        (r) =>
+          r.id !== ruleId &&
+          r.escapementType?.trim() === body.escapementType.trim() &&
+          r.enabled !== false
+      );
+      if (existingByEscapement) {
+        const error = new Error(`该擒纵类型已存在规则：${existingByEscapement.name}`);
+        error.status = 400;
+        error.code = "DUPLICATE_ESCAPEMENT_TYPE";
+        throw error;
+      }
+    }
+
+    if (body.rules !== undefined) {
+      const validationErrors = validateHealthScoreRulesConfig(body.rules);
+      if (validationErrors.length > 0) {
+        const error = new Error(`规则配置无效：${validationErrors.join("；")}`);
+        error.status = 400;
+        error.code = "INVALID_RULES_CONFIG";
+        throw error;
+      }
+    }
+
+    if (body.name !== undefined) rule.name = body.name;
+    if (body.description !== undefined) rule.description = body.description;
+    if (body.escapementType !== undefined) rule.escapementType = body.escapementType;
+    if (body.version !== undefined) rule.version = body.version;
+    if (body.rules !== undefined) rule.rules = body.rules;
+    if (body.enabled !== undefined) rule.enabled = Boolean(body.enabled);
+    rule.updatedAt = new Date().toISOString();
+    rule.updatedBy = currentUser.id;
+
+    await writeDb(db);
+    return send(res, 200, { data: rule });
+  }
+
+  if (healthScoreRuleDetailMatch && req.method === "DELETE") {
+    requireAdmin(req, db);
+    const ruleId = healthScoreRuleDetailMatch[1];
+    if (ruleId === "default") {
+      const error = new Error("默认规则不可删除");
+      error.status = 400;
+      throw error;
+    }
+    const ruleIndex = (db.healthScoreRules || []).findIndex((r) => r.id === ruleId);
+    if (ruleIndex === -1) {
+      const error = new Error("规则不存在");
+      error.status = 404;
+      throw error;
+    }
+    const deletedRule = db.healthScoreRules.splice(ruleIndex, 1)[0];
+    await writeDb(db);
+    return send(res, 200, { data: deletedRule });
   }
 
   if (req.method === "GET" && pathname === "/overview") {
@@ -2332,17 +2568,19 @@ async function handle(req, res) {
     if (conclusion) {
       filtered = data.filter((item) => item.conclusion === conclusion);
     }
+    const defaultConclusions = HEALTH_SCORE_RULES.conclusions;
     const summary = {
       total: accessibleClocks.length,
-      stable: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.stable).length,
-      observe: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.observe).length,
-      rework: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.rework).length,
-      insufficient: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.insufficient).length
+      stable: filtered.filter((item) => item.conclusion === defaultConclusions.stable).length,
+      observe: filtered.filter((item) => item.conclusion === defaultConclusions.observe).length,
+      rework: filtered.filter((item) => item.conclusion === defaultConclusions.rework).length,
+      insufficient: filtered.filter((item) => item.conclusion === defaultConclusions.insufficient).length
     };
     return send(res, 200, {
       summary,
       data: filtered,
       rules: HEALTH_SCORE_RULES,
+      customRules: (db.healthScoreRules || []).filter((r) => r.enabled !== false),
       generatedAt: new Date().toISOString()
     });
   }
