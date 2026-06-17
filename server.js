@@ -273,7 +273,8 @@ async function ensureBackupDir() {
 function formatTimestamp(date) {
   const d = date || new Date();
   const pad = (n) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const ms = d.getMilliseconds().toString().padStart(3, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${ms}`;
 }
 
 function getBackupFilePath(backupId) {
@@ -309,20 +310,37 @@ async function createBackup() {
   await ensureBackupDir();
   const db = await readDb();
   const timestamp = formatTimestamp();
-  const backupId = `backup_${timestamp}`;
-  const backupData = {
-    meta: {
-      id: backupId,
-      createdAt: new Date().toISOString(),
-      schemaVersion: "1.0",
-      counts: Object.fromEntries(
-        Object.entries(DB_SCHEMA).map(([key]) => [key, Array.isArray(db[key]) ? db[key].length : 0])
-      )
-    },
-    data: db
-  };
-  const filePath = getBackupFilePath(backupId);
-  await writeFile(filePath, JSON.stringify(backupData, null, 2));
+  const createdAt = new Date().toISOString();
+  const counts = Object.fromEntries(
+    Object.entries(DB_SCHEMA).map(([key]) => [key, Array.isArray(db[key]) ? db[key].length : 0])
+  );
+  let backupId;
+  let filePath;
+  let backupData;
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const suffix = attempt === 0 ? "" : `_${attempt}`;
+    backupId = `backup_${timestamp}${suffix}`;
+    filePath = getBackupFilePath(backupId);
+    backupData = {
+      meta: {
+        id: backupId,
+        createdAt,
+        schemaVersion: "1.0",
+        counts
+      },
+      data: db
+    };
+    try {
+      await writeFile(filePath, JSON.stringify(backupData, null, 2), { flag: "wx" });
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST" || attempt === 99) {
+        throw error;
+      }
+    }
+  }
+
   const fileStat = await stat(filePath);
   return {
     id: backupId,
