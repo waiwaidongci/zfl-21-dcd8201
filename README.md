@@ -34,45 +34,119 @@ curl -X POST http://127.0.0.1:3021/clocks/clock_demo/retests \
 
 ## 批量导入示例
 
+### 字段规范化规则
+
+导入时会自动进行以下规范化处理：
+- **编号(code)、擒纵类型(escapementType)、摆频(balanceFrequency)**：自动清理前后空格
+- **targetDailyRateSeconds**：校验必须是有效数字（可省略，默认 30）
+- **assignedTechnicianId**：支持用**用户ID**或**用户名**指定负责人
+
 ### 第一步：预览导入结果
 
 ```bash
 curl -X POST http://127.0.0.1:3021/clocks/import/preview \
   -H 'Content-Type: application/json' \
+  -H 'X-User-Id: user_admin_default' \
   -d '{
     "clocks": [
-      {"code":"CLK-1900-01","escapementType":"英国销轮式","balanceFrequency":"16000vph","targetDailyRateSeconds":30,"note":"爱德华时期座钟"},
-      {"code":"CLK-1890-07","escapementType":"瑞士杠杆式","balanceFrequency":"18000vph","note":"重复编号测试"},
-      {"code":"CLK-1910-05","escapementType":"","balanceFrequency":"21600vph","note":"缺少擒纵类型"},
-      {"code":"CLK-1920-12","escapementType":"德国工字轮式","balanceFrequency":"14400vph","targetDailyRateSeconds":25}
+      {
+        "code":"  CLK-1900-01  ",
+        "escapementType":"  英国销轮式  ",
+        "balanceFrequency":"  16000vph  ",
+        "targetDailyRateSeconds":30,
+        "note":"爱德华时期座钟（字段前后空格会被自动清理）",
+        "assignedTechnicianId": "zhang"
+      },
+      {
+        "code":"CLK-1890-07",
+        "escapementType":"瑞士杠杆式",
+        "balanceFrequency":"18000vph",
+        "note":"重复编号测试"
+      },
+      {
+        "code":"CLK-1910-05",
+        "escapementType":"",
+        "balanceFrequency":"21600vph",
+        "note":"缺少擒纵类型"
+      },
+      {
+        "code":"CLK-INVALID-01",
+        "escapementType":"瑞士杠杆式",
+        "balanceFrequency":"18000vph",
+        "targetDailyRateSeconds":"not-a-number",
+        "note":"targetDailyRateSeconds 不是数字"
+      },
+      {
+        "code":"CLK-TECH-NOEXIST",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "nobody",
+        "note":"指定不存在的负责人用户名"
+      },
+      {
+        "code":"CLK-1920-12",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "user_tech_wang",
+        "note":"用用户ID指定负责人"
+      }
     ]
   }'
 ```
 
-返回结果将包含：
-- `importable`：可正常导入的档案
-- `duplicates`：编号已存在的档案
-- `missingFields`：缺少关键字段（code、escapementType、balanceFrequency）的档案
+预览返回结构：
+- `summary`：汇总统计（total/importable/unimportable）及全局负责人信息
+- `importable`：可导入记录，每条包含：
+  - `normalized`：规范化后的字段值
+  - `changes`：被清理的前后空格（如有）
+  - `targetDailyRateSeconds`：数字校验后的结果
+  - `technician`：负责人摘要（id/username/name/role/matchedBy/source）
+- `unimportable`：不可导入记录，每条包含：
+  - `normalized`：规范化后的字段值
+  - `reasons`：不可导入原因列表
+  - `technician`：负责人解析信息（如有错误）
 
-### 第二步：确认写入
+### 第二步：确认写入（支持全局指定负责人）
+
+可通过顶层 `assignedTechnicianId` 为所有记录统一指定负责人（优先级低于单条记录内的指定），同样支持用户名或用户ID：
 
 ```bash
 curl -X POST http://127.0.0.1:3021/clocks/import \
   -H 'Content-Type: application/json' \
+  -H 'X-User-Id: user_admin_default' \
   -d '{
+    "assignedTechnicianId": "zhang",
     "clocks": [
-      {"code":"CLK-1900-01","escapementType":"英国销轮式","balanceFrequency":"16000vph","targetDailyRateSeconds":30,"note":"爱德华时期座钟"},
-      {"code":"CLK-1890-07","escapementType":"瑞士杠杆式","balanceFrequency":"18000vph","note":"重复编号测试"},
-      {"code":"CLK-1910-05","escapementType":"","balanceFrequency":"21600vph","note":"缺少擒纵类型"},
-      {"code":"CLK-1920-12","escapementType":"德国工字轮式","balanceFrequency":"14400vph","targetDailyRateSeconds":25}
+      {
+        "code":"  CLK-1900-01  ",
+        "escapementType":"  英国销轮式  ",
+        "balanceFrequency":"  16000vph  ",
+        "targetDailyRateSeconds":30,
+        "note":"字段空格会被自动清理"
+      },
+      {
+        "code":"CLK-1920-12",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "user_tech_wang",
+        "note":"单条指定优先于全局指定（用用户ID指定王师傅）"
+      }
     ]
   }'
 ```
 
+正式导入返回结构：
+- `summary`：汇总统计（total/created/unimportable）及全局负责人信息
+- `created`：成功创建的记录，每条包含规范化结果、负责人摘要、完整钟表信息
+- `unimportable`：不可导入记录，包含不可导入原因
+
 ### 第三步：验证新档案已写入
 
 ```bash
-curl http://127.0.0.1:3021/clocks
+curl http://127.0.0.1:3021/clocks -H 'X-User-Id: user_admin_default'
 ```
 
 ## 师傅交接记录示例

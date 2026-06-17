@@ -432,41 +432,176 @@ const HEALTH_SCORE_RULES = {
 
 const CLOCK_REQUIRED_FIELDS = ["code", "escapementType", "balanceFrequency"];
 
+function normalizeClockItem(rawItem) {
+  const normalized = {};
+  const changes = {};
+
+  if (rawItem.code !== undefined) {
+    const original = rawItem.code;
+    const trimmed = typeof original === "string" ? original.trim() : original;
+    normalized.code = trimmed;
+    if (original !== trimmed) changes.code = { before: original, after: trimmed };
+  }
+
+  if (rawItem.escapementType !== undefined) {
+    const original = rawItem.escapementType;
+    const trimmed = typeof original === "string" ? original.trim() : original;
+    normalized.escapementType = trimmed;
+    if (original !== trimmed) changes.escapementType = { before: original, after: trimmed };
+  }
+
+  if (rawItem.balanceFrequency !== undefined) {
+    const original = rawItem.balanceFrequency;
+    const trimmed = typeof original === "string" ? original.trim() : original;
+    normalized.balanceFrequency = trimmed;
+    if (original !== trimmed) changes.balanceFrequency = { before: original, after: trimmed };
+  }
+
+  if (rawItem.targetDailyRateSeconds !== undefined && rawItem.targetDailyRateSeconds !== "") {
+    normalized.targetDailyRateSeconds = rawItem.targetDailyRateSeconds;
+  }
+
+  if (rawItem.note !== undefined) {
+    normalized.note = rawItem.note;
+  }
+
+  if (rawItem.assignedTechnicianId !== undefined) {
+    normalized.assignedTechnicianId = rawItem.assignedTechnicianId;
+  }
+
+  return { normalized, changes };
+}
+
+function validateTargetDailyRateSeconds(value) {
+  if (value === undefined || value === "" || value === null) return { valid: true, normalized: undefined };
+  const num = Number(value);
+  if (isNaN(num)) return { valid: false, reason: `targetDailyRateSeconds 必须是数字，当前值：${value}` };
+  if (!isFinite(num)) return { valid: false, reason: `targetDailyRateSeconds 必须是有限数字，当前值：${value}` };
+  return { valid: true, normalized: num };
+}
+
+function resolveTechnician(db, input) {
+  if (!input) return { resolved: null, summary: null, error: null };
+  const trimmed = typeof input === "string" ? input.trim() : input;
+  if (!trimmed) return { resolved: null, summary: null, error: null };
+
+  let user = db.users.find((u) => u.id === trimmed);
+  let matchedBy = user ? "id" : null;
+
+  if (!user) {
+    user = db.users.find((u) => u.username === trimmed);
+    matchedBy = user ? "username" : null;
+  }
+
+  if (!user) {
+    return {
+      resolved: null,
+      summary: null,
+      error: `未找到匹配的负责人：${trimmed}（支持用户ID或用户名）`
+    };
+  }
+
+  return {
+    resolved: user.id,
+    summary: {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      matchedBy
+    },
+    error: null
+  };
+}
+
 function classifyImportItems(db, items) {
   const existingCodes = new Set(db.clocks.map((c) => c.code));
   const seenInBatch = new Set();
   const importable = [];
-  const duplicates = [];
-  const missingFields = [];
+  const unimportable = [];
 
   for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+    const rawItem = items[i];
+    const { normalized, changes } = normalizeClockItem(rawItem);
+    const reasons = [];
+
     const missing = CLOCK_REQUIRED_FIELDS.filter(
-      (f) => item[f] === undefined || item[f] === ""
+      (f) => normalized[f] === undefined || normalized[f] === ""
     );
     if (missing.length > 0) {
-      missingFields.push({ index: i, item, missing });
-      continue;
+      reasons.push(`缺少必填字段：${missing.join("、")}`);
     }
-    if (existingCodes.has(item.code) || seenInBatch.has(item.code)) {
-      duplicates.push({ index: i, item, code: item.code });
-      continue;
+
+    const rateValidation = validateTargetDailyRateSeconds(normalized.targetDailyRateSeconds);
+    if (!rateValidation.valid) {
+      reasons.push(rateValidation.reason);
     }
-    seenInBatch.add(item.code);
-    importable.push({ index: i, item });
+
+    const techInput = normalized.assignedTechnicianId;
+    const techResult = resolveTechnician(db, techInput);
+    if (techInput && techResult.error) {
+      reasons.push(techResult.error);
+    }
+
+    if (normalized.code && (existingCodes.has(normalized.code) || seenInBatch.has(normalized.code))) {
+      reasons.push(`编号已存在：${normalized.code}`);
+    }
+
+    if (normalized.code) {
+      seenInBatch.add(normalized.code);
+    }
+
+    const finalRate = rateValidation.valid ? rateValidation.normalized : undefined;
+
+    if (reasons.length > 0) {
+      unimportable.push({
+        index: i,
+        rawItem,
+        normalized,
+        changes,
+        reasons,
+        targetDailyRateSecondsValid: rateValidation.valid,
+        technician: techResult.summary
+          ? { ...techResult.summary, resolved: techResult.resolved }
+          : techInput
+          ? { input: techInput, error: techResult.error }
+          : null
+      });
+    } else {
+      importable.push({
+        index: i,
+        rawItem,
+        normalized,
+        changes,
+        targetDailyRateSeconds: finalRate ?? 30,
+        technician: techResult.summary
+          ? { ...techResult.summary, resolved: techResult.resolved }
+          : null
+      });
+    }
   }
 
-  return { importable, duplicates, missingFields };
+  return {
+    importable,
+    unimportable,
+    summary: {
+      total: items.length,
+      importable: importable.length,
+      unimportable: unimportable.length
+    }
+  };
 }
 
-function buildClockFromItem(item) {
+function buildClockFromItem(item, globalTechnicianId) {
+  const effectiveTechnicianId = item.technician?.resolved ?? globalTechnicianId ?? null;
   return {
     id: makeId("clock"),
-    code: item.code,
-    escapementType: item.escapementType,
-    balanceFrequency: item.balanceFrequency,
+    code: item.normalized.code,
+    escapementType: item.normalized.escapementType,
+    balanceFrequency: item.normalized.balanceFrequency,
     targetDailyRateSeconds: Number(item.targetDailyRateSeconds ?? 30),
-    note: item.note || "",
+    note: item.normalized.note || "",
+    assignedTechnicianId: effectiveTechnicianId,
     createdAt: new Date().toISOString()
   };
 }
@@ -1747,17 +1882,49 @@ async function handle(req, res) {
       error.status = 400;
       throw error;
     }
-    const { importable, duplicates, missingFields } = classifyImportItems(db, body.clocks);
+    const globalTechInput = body.assignedTechnicianId;
+    const globalTechResult = globalTechInput ? resolveTechnician(db, globalTechInput) : null;
+    if (globalTechInput && globalTechResult?.error) {
+      const error = new Error(globalTechResult.error);
+      error.status = 400;
+      throw error;
+    }
+
+    const { importable, unimportable, summary } = classifyImportItems(db, body.clocks);
+
+    const importablePreview = importable.map(({ index, normalized, changes, targetDailyRateSeconds, technician }) => {
+      const effectiveTech = globalTechResult && globalTechResult.resolved
+        ? { ...globalTechResult.summary, resolved: globalTechResult.resolved, source: "global" }
+        : technician
+        ? { ...technician, source: "item" }
+        : null;
+      return {
+        index,
+        normalized,
+        changes,
+        targetDailyRateSeconds,
+        technician: effectiveTech
+      };
+    });
+
+    const unimportablePreview = unimportable.map(({ index, rawItem, normalized, changes, reasons, technician }) => ({
+      index,
+      rawItem,
+      normalized,
+      changes,
+      reasons,
+      technician
+    }));
+
     return send(res, 200, {
       summary: {
-        total: body.clocks.length,
-        importable: importable.length,
-        duplicates: duplicates.length,
-        missingFields: missingFields.length
+        ...summary,
+        globalTechnician: globalTechResult && globalTechResult.summary
+          ? { ...globalTechResult.summary, resolved: globalTechResult.resolved }
+          : null
       },
-      importable: importable.map(({ index, item }) => ({ index, item })),
-      duplicates: duplicates.map(({ index, item, code }) => ({ index, code, item })),
-      missingFields: missingFields.map(({ index, item, missing }) => ({ index, missing, item }))
+      importable: importablePreview,
+      unimportable: unimportablePreview
     });
   }
 
@@ -1769,25 +1936,25 @@ async function handle(req, res) {
       error.status = 400;
       throw error;
     }
-    const { importable, duplicates, missingFields } = classifyImportItems(db, body.clocks);
-    const created = [];
-    const assignedTechnicianId = body.assignedTechnicianId || null;
-    if (assignedTechnicianId) {
-      const tech = db.users.find((u) => u.id === assignedTechnicianId);
-      if (!tech) {
-        const error = new Error("指定的负责人不存在");
-        error.status = 400;
-        throw error;
-      }
+    const globalTechInput = body.assignedTechnicianId || null;
+    const globalTechResult = globalTechInput ? resolveTechnician(db, globalTechInput) : null;
+    if (globalTechInput && globalTechResult?.error) {
+      const error = new Error(globalTechResult.error);
+      error.status = 400;
+      throw error;
     }
-    for (const { item } of importable) {
-      const clock = buildClockFromItem(item);
-      clock.assignedTechnicianId = assignedTechnicianId;
+    const globalTechnicianId = globalTechResult?.resolved || null;
+
+    const { importable, unimportable, summary } = classifyImportItems(db, body.clocks);
+    const created = [];
+    const createdResults = [];
+
+    for (const classified of importable) {
+      const clock = buildClockFromItem(classified, globalTechnicianId);
       clock.createdBy = currentUser.id;
       db.clocks.push(clock);
       createAuditLog(db, {
         createdBy: currentUser.id,
-      createdBy: currentUser.id,
         operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
         resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
         resourceId: clock.id,
@@ -1797,18 +1964,54 @@ async function handle(req, res) {
         changedFields: null
       });
       created.push(clock);
+
+      const hasItemTech = classified.technician?.resolved ? true : false;
+      const effectiveTechId = hasItemTech
+        ? classified.technician.resolved
+        : globalTechnicianId;
+      const effectiveTech = effectiveTechId
+        ? db.users.find((u) => u.id === effectiveTechId)
+        : null;
+
+      createdResults.push({
+        index: classified.index,
+        normalized: classified.normalized,
+        changes: classified.changes,
+        targetDailyRateSeconds: classified.targetDailyRateSeconds,
+        technician: effectiveTech
+          ? {
+              id: effectiveTech.id,
+              username: effectiveTech.username,
+              name: effectiveTech.name,
+              role: effectiveTech.role,
+              source: hasItemTech ? "item" : (globalTechnicianId ? "global" : null)
+            }
+          : null,
+        created: clockSummary(db, clock)
+      });
     }
     await writeDb(db);
+
+    const unimportableResults = unimportable.map(({ index, rawItem, normalized, changes, reasons, technician }) => ({
+      index,
+      rawItem,
+      normalized,
+      changes,
+      reasons,
+      technician
+    }));
+
     return send(res, 201, {
       summary: {
-        total: body.clocks.length,
+        total: summary.total,
         created: created.length,
-        duplicates: duplicates.length,
-        missingFields: missingFields.length
+        unimportable: unimportable.length,
+        globalTechnician: globalTechResult && globalTechResult.summary
+          ? { ...globalTechResult.summary, resolved: globalTechResult.resolved }
+          : null
       },
-      created: created.map((clock) => clockSummary(db, clock)),
-      duplicates: duplicates.map(({ index, code, item }) => ({ index, code, item })),
-      missingFields: missingFields.map(({ index, item, missing }) => ({ index, missing, item }))
+      created: createdResults,
+      unimportable: unimportableResults
     });
   }
 
