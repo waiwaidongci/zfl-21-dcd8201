@@ -121,6 +121,9 @@ const initialData = {
       status: "pending",
       completedAt: null,
       completedRetestId: null,
+      cancelledAt: null,
+      cancelledBy: null,
+      cancelReason: null,
       note: "调校后一周复测",
       createdAt: new Date().toISOString(),
       createdBy: DEFAULT_SYSTEM_USER_ID
@@ -378,6 +381,8 @@ const routes = [
   "GET /retest-tasks",
   "POST /clocks/:id/retest-tasks",
   "GET /clocks/:id/retest-tasks",
+  "PUT /retest-tasks/:id",
+  "POST /retest-tasks/:id/cancel",
   "GET /handovers",
   "POST /backups",
   "GET /backups",
@@ -1516,6 +1521,27 @@ function migrateDbAddCreatedBy(db) {
   return changed;
 }
 
+function migrateDbAddRetestTaskCancelFields(db) {
+  let changed = false;
+  if (db.retestTasks) {
+    for (const item of db.retestTasks) {
+      if (!item.cancelledAt) {
+        item.cancelledAt = null;
+        changed = true;
+      }
+      if (!item.cancelledBy) {
+        item.cancelledBy = null;
+        changed = true;
+      }
+      if (!item.cancelReason) {
+        item.cancelReason = null;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 async function ensureDb() {
   await mkdir(path.dirname(DB_FILE), { recursive: true });
   let dbData;
@@ -1525,12 +1551,13 @@ async function ensureDb() {
     await writeFile(DB_FILE, JSON.stringify(initialData, null, 2));
     return;
   }
-  const needsMigration = migrateDbAddCreatedBy(dbData);
+  const needsMigration1 = migrateDbAddCreatedBy(dbData);
+  const needsMigration2 = migrateDbAddRetestTaskCancelFields(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
 }
@@ -1604,6 +1631,44 @@ function enrichWithCreator(db, item) {
     ...item,
     creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
   };
+}
+
+function enrichWithCanceller(db, item) {
+  if (!item) return item;
+  const canceller = db.users.find((u) => u.id === item.cancelledBy) || null;
+  return {
+    ...item,
+    canceller: canceller ? { id: canceller.id, name: canceller.name, role: canceller.role } : null
+  };
+}
+
+function enrichRetestTask(db, task, now) {
+  if (!task) return task;
+  const enriched = enrichWithCanceller(db, enrichWithCreator(db, {
+    ...task,
+    clock: db.clocks.find((c) => c.id === task.clockId) || null,
+    adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
+    overdue: task.status === "pending" && new Date(task.plannedRetestAt) < (now || new Date())
+  }));
+  return enriched;
+}
+
+function canManageRetestTask(db, task, user) {
+  if (!user) return false;
+  if (user.role === USER_ROLES.ADMIN) return true;
+  const clock = db.clocks.find((c) => c.id === task.clockId);
+  if (!clock) return false;
+  return clock.assignedTechnicianId === user.id;
+}
+
+function findRetestTask(db, taskId) {
+  const task = (db.retestTasks || []).find((t) => t.id === taskId);
+  if (!task) {
+    const error = new Error("复测任务不存在");
+    error.status = 404;
+    throw error;
+  }
+  return task;
 }
 
 async function handle(req, res) {
@@ -2060,7 +2125,7 @@ async function handle(req, res) {
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id).map((a) => enrichWithCreator(db, a));
     const retests = db.retests.filter((item) => item.clockId === clock.id).map((r) => enrichWithCreator(db, r));
     const handovers = listHandovers(db, clock.id).map((h) => enrichWithCreator(db, h));
-    const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id).map((t) => enrichWithCreator(db, t));
+    const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id).map((t) => enrichRetestTask(db, t));
     return send(res, 200, { data: { clock: clockSummary(db, clock), adjustments, retests, handovers, retestTasks, latestRetest: enrichWithCreator(db, latestRetest(db, clock.id)) } });
   }
 
@@ -2273,6 +2338,9 @@ async function handle(req, res) {
         status: "pending",
         completedAt: null,
         completedRetestId: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        cancelReason: null,
         note: body.retestTaskNote || "",
         createdAt: new Date().toISOString(),
         createdBy: currentUser.id
@@ -2445,6 +2513,9 @@ async function handle(req, res) {
         status: "pending",
         completedAt: null,
         completedRetestId: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        cancelReason: null,
         note: body.retestTaskNote || "",
         createdAt: new Date().toISOString(),
         createdBy: currentUser.id
@@ -2740,12 +2811,12 @@ async function handle(req, res) {
       if (pa !== pb) return pa - pb;
       return new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt);
     });
-    data = data.map((task) => enrichWithCreator(db, {
+    data = data.map((task) => enrichWithCanceller(db, enrichWithCreator(db, {
       ...task,
       clock: db.clocks.find((c) => c.id === task.clockId) || null,
       adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
       overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
-    }));
+    })));
     return send(res, 200, { data, total: data.length });
   }
 
@@ -2782,6 +2853,9 @@ async function handle(req, res) {
       status: "pending",
       completedAt: null,
       completedRetestId: null,
+      cancelledAt: null,
+      cancelledBy: null,
+      cancelReason: null,
       note: body.note || "",
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id
@@ -2790,12 +2864,12 @@ async function handle(req, res) {
     db.retestTasks.push(task);
     await writeDb(db);
     return send(res, 201, {
-      data: enrichWithCreator(db, {
+      data: enrichWithCanceller(db, enrichWithCreator(db, {
         ...task,
         clock: clockSummary(db, clock),
         adjustment: db.adjustments.find((a) => a.id === adjustmentId) || null,
         overdue: false
-      })
+      }))
     });
   }
 
@@ -2813,12 +2887,91 @@ async function handle(req, res) {
     const data = (db.retestTasks || [])
       .filter((item) => item.clockId === clock.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .map((task) => enrichWithCreator(db, {
+      .map((task) => enrichWithCanceller(db, enrichWithCreator(db, {
         ...task,
         adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
         overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
-      }));
+      })));
     return send(res, 200, { data, total: data.length });
+  }
+
+  const retestTaskUpdateMatch = pathname.match(/^\/retest-tasks\/([^/]+)$/);
+  if (retestTaskUpdateMatch && req.method === "PUT") {
+    requireAuth(req, db);
+    const task = findRetestTask(db, retestTaskUpdateMatch[1]);
+    if (!canManageRetestTask(db, task, currentUser)) {
+      const error = new Error("无权限操作该复测任务");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    if (task.status === "completed") {
+      const error = new Error("已完成的复测任务不能改期");
+      error.status = 400;
+      error.code = "TASK_ALREADY_COMPLETED";
+      throw error;
+    }
+    if (task.status === "cancelled") {
+      const error = new Error("已取消的复测任务不能改期");
+      error.status = 400;
+      error.code = "TASK_ALREADY_CANCELLED";
+      throw error;
+    }
+    const body = await parseBody(req);
+    const validPriorities = ["high", "medium", "low"];
+    if (body.priority !== undefined && !validPriorities.includes(body.priority)) {
+      const error = new Error(`priority 必须为 ${validPriorities.join("/")}`);
+      error.status = 400;
+      throw error;
+    }
+    if (body.plannedRetestAt !== undefined) {
+      task.plannedRetestAt = body.plannedRetestAt;
+    }
+    if (body.priority !== undefined) {
+      task.priority = body.priority;
+    }
+    if (body.note !== undefined) {
+      task.note = body.note;
+    }
+    task.updatedAt = new Date().toISOString();
+    await writeDb(db);
+    return send(res, 200, {
+      data: enrichRetestTask(db, task)
+    });
+  }
+
+  const retestTaskCancelMatch = pathname.match(/^\/retest-tasks\/([^/]+)\/cancel$/);
+  if (retestTaskCancelMatch && req.method === "POST") {
+    requireAuth(req, db);
+    const task = findRetestTask(db, retestTaskCancelMatch[1]);
+    if (!canManageRetestTask(db, task, currentUser)) {
+      const error = new Error("无权限操作该复测任务");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    if (task.status === "completed") {
+      const error = new Error("已完成的复测任务不能取消");
+      error.status = 400;
+      error.code = "TASK_ALREADY_COMPLETED";
+      throw error;
+    }
+    if (task.status === "cancelled") {
+      const error = new Error("复测任务已取消");
+      error.status = 400;
+      error.code = "TASK_ALREADY_CANCELLED";
+      throw error;
+    }
+    const body = await parseBody(req);
+    required(body, ["cancelReason"]);
+    task.status = "cancelled";
+    task.cancelledAt = new Date().toISOString();
+    task.cancelledBy = currentUser.id;
+    task.cancelReason = body.cancelReason;
+    await writeDb(db);
+    return send(res, 200, {
+      data: enrichRetestTask(db, task)
+    });
   }
 
   if (req.method === "GET" && pathname === "/handovers") {

@@ -198,3 +198,91 @@ curl http://127.0.0.1:3021/clocks/nonexistent/handovers
   "error": "钟表不存在"
 }
 ```
+
+## 复测任务改期与取消示例
+
+### 改期复测任务
+
+修改待复测任务的计划复测时间、优先级或备注。只有 **管理员** 或 **该钟表的负责人** 可以操作，且 **已完成** 或 **已取消** 的任务不能改期。
+
+```bash
+curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_mqguylxt_mji5ug \
+  -H 'Content-Type: application/json' \
+  -H 'X-User-Id: user_admin_default' \
+  -d '{
+    "plannedRetestAt": "2026-07-05T00:00:00.000Z",
+    "priority": "high",
+    "note": "客户要求提前复测，改为高优先级"
+  }'
+```
+
+可修改字段（均可选，至少传一个）：
+- `plannedRetestAt`：新的计划复测时间（ISO 8601）
+- `priority`：优先级，`high` / `medium` / `low`
+- `note`：备注
+
+返回中包含：
+- `cancelledAt`：取消时间（未取消则为 `null`）
+- `cancelledBy`：取消人ID（未取消则为 `null`）
+- `cancelReason`：取消原因（未取消则为 `null`）
+- `canceller`：取消人详情对象（包含 `id`、`name`、`role`）
+
+### 取消复测任务
+
+取消一个处于 `pending` 状态的复测任务，并记录取消原因。权限规则同改期。**已完成** 或 **已取消** 的任务不能再取消。
+
+```bash
+curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_mqguylxt_mji5ug/cancel \
+  -H 'Content-Type: application/json' \
+  -H 'X-User-Id: user_admin_default' \
+  -d '{
+    "cancelReason": "客户临时送修其他故障，复测延后安排"
+  }'
+```
+
+必填字段：`cancelReason`（取消原因）
+
+取消成功后任务的 `status` 变为 `"cancelled"`，同时写入：
+- `cancelledAt`：取消时间
+- `cancelledBy`：操作人ID
+- `cancelReason`：取消原因
+- `canceller`：操作人详情（列表接口返回）
+
+### 查看任务列表（含取消信息）
+
+复测任务列表（`GET /retest-tasks`）和单只钟表任务列表（`GET /clocks/:id/retest-tasks`）都会返回取消相关字段。
+
+```bash
+# 全量任务（含已取消的）
+curl http://127.0.0.1:3021/retest-tasks -H 'X-User-Id: user_admin_default'
+
+# 按状态筛选已取消的任务
+curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" -H 'X-User-Id: user_admin_default'
+```
+
+### 权限与状态错误
+
+**无权限（非负责人且非管理员）：**
+```json
+{
+  "error": "无权限操作该复测任务",
+  "code": "FORBIDDEN"
+}
+```
+
+**对已完成任务改期/取消：**
+```json
+{
+  "error": "已完成的复测任务不能改期",
+  "code": "TASK_ALREADY_COMPLETED"
+}
+```
+
+**对已取消任务改期：**
+```json
+{
+  "error": "已取消的复测任务不能改期",
+  "code": "TASK_ALREADY_CANCELLED"
+}
+```
+

@@ -134,20 +134,27 @@
       "completedRetestId": "retest_mqguyr0d_y1p5we",
       "note": "调校后一周复测",
       "createdAt": "2026-06-17T00:00:00.000Z",
-      "createdBy": "user_system"
+      "createdBy": "user_system",
+      "cancelledAt": null,
+      "cancelledBy": null,
+      "cancelReason": null
     },
     {
       "id": "retestTask_mqguylxt_mji5ug",
       "clockId": "clock_demo",
       "adjustmentId": "adjustment_demo",
-      "plannedRetestAt": "2026-06-25T00:00:00.000Z",
-      "priority": "high",
-      "status": "pending",
+      "plannedRetestAt": "2026-07-05T00:00:00.000Z",
+      "priority": "low",
+      "status": "cancelled",
       "completedAt": null,
       "completedRetestId": null,
-      "note": "高优先级复测",
+      "note": "客户要求延后复测，降低优先级",
       "createdAt": "2026-06-16T16:30:12.881Z",
-      "createdBy": "user_system"
+      "createdBy": "user_system",
+      "cancelledAt": "2026-06-17T05:08:37.690Z",
+      "cancelledBy": "user_admin_default",
+      "cancelReason": "客户临时送修其他故障，复测延后安排",
+      "updatedAt": "2026-06-17T05:08:26.032Z"
     },
     {
       "id": "retestTask_mqgvdqfg_izcdn4",
@@ -160,7 +167,10 @@
       "completedRetestId": "retest_mqgve4a9_w86qqa",
       "note": "二次复测任务",
       "createdAt": "2026-06-16T16:41:58.540Z",
-      "createdBy": "user_system"
+      "createdBy": "user_system",
+      "cancelledAt": null,
+      "cancelledBy": null,
+      "cancelReason": null
     }
   ],
   "suggestions": [
