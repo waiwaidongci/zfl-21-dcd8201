@@ -1893,10 +1893,11 @@ async function handle(req, res) {
     const { importable, unimportable, summary } = classifyImportItems(db, body.clocks);
 
     const importablePreview = importable.map(({ index, normalized, changes, targetDailyRateSeconds, technician }) => {
-      const effectiveTech = globalTechResult && globalTechResult.resolved
-        ? { ...globalTechResult.summary, resolved: globalTechResult.resolved, source: "global" }
-        : technician
+      const hasItemTech = technician?.resolved ? true : false;
+      const effectiveTech = hasItemTech
         ? { ...technician, source: "item" }
+        : globalTechResult && globalTechResult.resolved
+        ? { ...globalTechResult.summary, resolved: globalTechResult.resolved, source: "global" }
         : null;
       return {
         index,
