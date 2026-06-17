@@ -206,7 +206,7 @@ curl http://127.0.0.1:3021/clocks/nonexistent/handovers
 修改待复测任务的计划复测时间、优先级或备注。只有 **管理员** 或 **该钟表的负责人** 可以操作，且 **已完成** 或 **已取消** 的任务不能改期。
 
 ```bash
-curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_mqguylxt_mji5ug \
+curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending \
   -H 'Content-Type: application/json' \
   -H 'X-User-Id: user_admin_default' \
   -d '{
@@ -232,7 +232,7 @@ curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_mqguylxt_mji5ug \
 取消一个处于 `pending` 状态的复测任务，并记录取消原因。权限规则同改期。**已完成** 或 **已取消** 的任务不能再取消。
 
 ```bash
-curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_mqguylxt_mji5ug/cancel \
+curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_readme_pending/cancel \
   -H 'Content-Type: application/json' \
   -H 'X-User-Id: user_admin_default' \
   -d '{
@@ -285,4 +285,3 @@ curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" -H 'X-User-Id: user_a
   "code": "TASK_ALREADY_CANCELLED"
 }
 ```
-

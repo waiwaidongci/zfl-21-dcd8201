@@ -157,6 +157,22 @@
       "updatedAt": "2026-06-17T05:08:26.032Z"
     },
     {
+      "id": "retestTask_readme_pending",
+      "clockId": "clock_demo",
+      "adjustmentId": "adjustment_demo",
+      "plannedRetestAt": "2026-07-01T00:00:00.000Z",
+      "priority": "medium",
+      "status": "pending",
+      "completedAt": null,
+      "completedRetestId": null,
+      "note": "README演示用待复测任务",
+      "createdAt": "2026-06-17T05:20:00.000Z",
+      "createdBy": "user_system",
+      "cancelledAt": null,
+      "cancelledBy": null,
+      "cancelReason": null
+    },
+    {
       "id": "retestTask_mqgvdqfg_izcdn4",
       "clockId": "clock_demo",
       "adjustmentId": "adjustment_demo",
