@@ -26,6 +26,25 @@
       "targetDailyRateSeconds": 25,
       "note": "",
       "createdAt": "2026-06-16T15:16:37.327Z"
+    },
+    {
+      "id": "clock_mqhev67z_2pnedr",
+      "code": "TEST-AUDIT-001",
+      "escapementType": "瑞士杠杆式",
+      "balanceFrequency": "18000vph",
+      "targetDailyRateSeconds": 30,
+      "note": "审计测试用表",
+      "createdAt": "2026-06-17T01:47:24.863Z"
+    },
+    {
+      "id": "clock_mqhf0roy_qhzgzm",
+      "code": "AUDIT-TEST-001",
+      "escapementType": "工字轮式",
+      "balanceFrequency": "21600vph",
+      "targetDailyRateSeconds": 20,
+      "note": "更新了备注信息，用于测试审计追踪",
+      "createdAt": "2026-06-17T01:51:45.970Z",
+      "updatedAt": "2026-06-17T01:52:07.100Z"
     }
   ],
   "adjustments": [
@@ -37,6 +56,15 @@
       "amount": "游丝快慢针向慢侧微调0.4格",
       "note": "初次调校，先保守处理",
       "createdAt": "2026-06-16T00:00:00.000Z"
+    },
+    {
+      "id": "adjustment_mqhf1f7x_1h1p1r",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "currentDailyRateSeconds": 45,
+      "direction": "慢针方向",
+      "amount": "游丝快慢针向慢侧微调0.3格",
+      "note": "审计测试：首次调校",
+      "createdAt": "2026-06-17T01:52:16.461Z"
     }
   ],
   "retests": [
@@ -69,6 +97,16 @@
       "amplitude": 270,
       "qualified": true,
       "note": "精确指定任务复测"
+    },
+    {
+      "id": "retest_mqhf1m29_hh54x2",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "adjustmentId": "adjustment_mqhf1f7x_1h1p1r",
+      "testedAt": "2026-06-17T01:52:25.329Z",
+      "dailyRateSeconds": 22,
+      "amplitude": 255,
+      "qualified": false,
+      "note": "审计测试：调校后首次复测"
     }
   ],
   "handovers": [
@@ -137,6 +175,117 @@
       "referenceAdjustmentId": "adjustment_demo",
       "note": "初次生成建议，保存备案",
       "createdAt": "2026-06-16T16:19:35.505Z"
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "audit_mqhev67z_yr81jb",
+      "operationType": "clock_create",
+      "resourceType": "clock",
+      "resourceId": "clock_mqhev67z_2pnedr",
+      "clockId": "clock_mqhev67z_2pnedr",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "code": "TEST-AUDIT-001",
+        "escapementType": "瑞士杠杆式",
+        "balanceFrequency": "18000vph",
+        "targetDailyRateSeconds": 30,
+        "note": "审计测试用表"
+      },
+      "changedFields": null,
+      "summary": "创建钟表档案 TEST-AUDIT-001",
+      "createdAt": "2026-06-17T01:47:24.864Z"
+    },
+    {
+      "id": "audit_mqhf0roy_nxyeiz",
+      "operationType": "clock_create",
+      "resourceType": "clock",
+      "resourceId": "clock_mqhf0roy_qhzgzm",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "code": "AUDIT-TEST-001",
+        "escapementType": "工字轮式",
+        "balanceFrequency": "21600vph",
+        "targetDailyRateSeconds": 25,
+        "note": "审计功能测试钟表"
+      },
+      "changedFields": null,
+      "summary": "创建钟表档案 AUDIT-TEST-001",
+      "createdAt": "2026-06-17T01:51:45.970Z"
+    },
+    {
+      "id": "audit_mqhf17zw_5zelpm",
+      "operationType": "clock_update",
+      "resourceType": "clock",
+      "resourceId": "clock_mqhf0roy_qhzgzm",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "beforeSnapshot": {
+        "code": "AUDIT-TEST-001",
+        "escapementType": "工字轮式",
+        "balanceFrequency": "21600vph",
+        "targetDailyRateSeconds": 25,
+        "note": "审计功能测试钟表"
+      },
+      "afterSnapshot": {
+        "code": "AUDIT-TEST-001",
+        "escapementType": "工字轮式",
+        "balanceFrequency": "21600vph",
+        "targetDailyRateSeconds": 20,
+        "note": "更新了备注信息，用于测试审计追踪"
+      },
+      "changedFields": [
+        {
+          "field": "targetDailyRateSeconds",
+          "before": 25,
+          "after": 20
+        },
+        {
+          "field": "note",
+          "before": "审计功能测试钟表",
+          "after": "更新了备注信息，用于测试审计追踪"
+        }
+      ],
+      "summary": "更新钟表档案 AUDIT-TEST-001 关键字段：targetDailyRateSeconds、note",
+      "createdAt": "2026-06-17T01:52:07.100Z"
+    },
+    {
+      "id": "audit_mqhf1f7x_3z13x3",
+      "operationType": "adjustment_create",
+      "resourceType": "adjustment",
+      "resourceId": "adjustment_mqhf1f7x_1h1p1r",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "id": "adjustment_mqhf1f7x_1h1p1r",
+        "currentDailyRateSeconds": 45,
+        "direction": "慢针方向",
+        "amount": "游丝快慢针向慢侧微调0.3格",
+        "note": "审计测试：首次调校"
+      },
+      "changedFields": null,
+      "summary": "新增调校记录，方向：慢针方向，调整量：游丝快慢针向慢侧微调0.3格",
+      "createdAt": "2026-06-17T01:52:16.461Z"
+    },
+    {
+      "id": "audit_mqhf1m29_65d7u5",
+      "operationType": "retest_create",
+      "resourceType": "retest",
+      "resourceId": "retest_mqhf1m29_hh54x2",
+      "clockId": "clock_mqhf0roy_qhzgzm",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "id": "retest_mqhf1m29_hh54x2",
+        "adjustmentId": "adjustment_mqhf1f7x_1h1p1r",
+        "testedAt": "2026-06-17T01:52:25.329Z",
+        "dailyRateSeconds": 22,
+        "amplitude": 255,
+        "qualified": false,
+        "note": "审计测试：调校后首次复测"
+      },
+      "changedFields": null,
+      "summary": "新增复测记录，日差：22秒/天，振幅：255，合格：否",
+      "createdAt": "2026-06-17T01:52:25.329Z"
     }
   ]
 }

@@ -64,18 +64,63 @@ const initialData = {
       createdAt: new Date().toISOString()
     }
   ],
-  suggestions: []
+  suggestions: [],
+  auditLogs: [
+    {
+      id: "audit_demo",
+      operationType: "clock_create",
+      resourceType: "clock",
+      resourceId: "clock_demo",
+      clockId: "clock_demo",
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: "clock_demo",
+        code: "CLK-1890-07",
+        escapementType: "瑞士杠杆式",
+        balanceFrequency: "18000vph",
+        targetDailyRateSeconds: 20,
+        note: "怀表机芯，走时偏快"
+      },
+      changedFields: null,
+      summary: "创建钟表档案 CLK-1890-07",
+      createdAt: new Date().toISOString()
+    }
+  ]
 };
+
+const AUDIT_OPERATION_TYPES = {
+  CLOCK_CREATE: "clock_create",
+  CLOCK_UPDATE: "clock_update",
+  ADJUSTMENT_CREATE: "adjustment_create",
+  RETEST_CREATE: "retest_create"
+};
+
+const AUDIT_RESOURCE_TYPES = {
+  CLOCK: "clock",
+  ADJUSTMENT: "adjustment",
+  RETEST: "retest"
+};
+
+const CLOCK_KEY_FIELDS = [
+  "code",
+  "escapementType",
+  "balanceFrequency",
+  "targetDailyRateSeconds",
+  "note"
+];
 
 const routes = [
   "GET /health",
   "GET /overview",
   "GET /clocks",
   "POST /clocks",
+  "PUT /clocks/:id",
   "POST /clocks/import/preview",
   "POST /clocks/import",
   "GET /clocks/not-qualified",
   "GET /clocks/:id/history",
+  "GET /clocks/:id/audit-logs",
+  "GET /audit-logs",
   "GET /clocks/:id/health-score",
   "POST /clocks/:id/adjustments",
   "POST /clocks/:id/retests",
@@ -431,6 +476,115 @@ function findSuggestion(db, suggestionId) {
   return suggestion;
 }
 
+function extractKeyFields(obj, fields) {
+  if (!obj) return null;
+  const result = {};
+  for (const field of fields) {
+    if (obj[field] !== undefined) {
+      result[field] = obj[field];
+    }
+  }
+  return result;
+}
+
+function summarizeFieldChanges(before, after, fields) {
+  const changes = [];
+  for (const field of fields) {
+    const beforeValue = before ? before[field] : undefined;
+    const afterValue = after ? after[field] : undefined;
+    if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) {
+      changes.push({
+        field,
+        before: beforeValue ?? null,
+        after: afterValue ?? null
+      });
+    }
+  }
+  return changes.length > 0 ? changes : null;
+}
+
+function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSnapshot, changedFields) {
+  switch (operationType) {
+    case AUDIT_OPERATION_TYPES.CLOCK_CREATE:
+      return `创建钟表档案 ${afterSnapshot?.code || ""}`;
+    case AUDIT_OPERATION_TYPES.CLOCK_UPDATE:
+      if (changedFields) {
+        const fieldNames = changedFields.map((f) => f.field).join("、");
+        return `更新钟表档案 ${afterSnapshot?.code || ""} 关键字段：${fieldNames}`;
+      }
+      return `更新钟表档案 ${afterSnapshot?.code || ""}`;
+    case AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE:
+      return `新增调校记录，方向：${afterSnapshot?.direction || ""}，调整量：${afterSnapshot?.amount || ""}`;
+    case AUDIT_OPERATION_TYPES.RETEST_CREATE:
+      return `新增复测记录，日差：${afterSnapshot?.dailyRateSeconds ?? ""}秒/天，振幅：${afterSnapshot?.amplitude ?? ""}，合格：${afterSnapshot?.qualified ? "是" : "否"}`;
+    default:
+      return `${operationType} ${resourceType}`;
+  }
+}
+
+function createAuditLog(db, params) {
+  const {
+    operationType,
+    resourceType,
+    resourceId,
+    clockId,
+    beforeSnapshot,
+    afterSnapshot,
+    changedFields
+  } = params;
+
+  if (!db.auditLogs) db.auditLogs = [];
+
+  const log = {
+    id: makeId("audit"),
+    operationType,
+    resourceType,
+    resourceId,
+    clockId,
+    beforeSnapshot,
+    afterSnapshot,
+    changedFields,
+    summary: buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSnapshot, changedFields),
+    createdAt: new Date().toISOString()
+  };
+  db.auditLogs.push(log);
+  return log;
+}
+
+function enrichAuditLog(db, log) {
+  const clock = db.clocks.find((c) => c.id === log.clockId) || null;
+  let resource = null;
+  switch (log.resourceType) {
+    case AUDIT_RESOURCE_TYPES.CLOCK:
+      resource = clock ? { id: clock.id, code: clock.code } : null;
+      break;
+    case AUDIT_RESOURCE_TYPES.ADJUSTMENT:
+      resource = db.adjustments.find((a) => a.id === log.resourceId) || null;
+      break;
+    case AUDIT_RESOURCE_TYPES.RETEST:
+      resource = db.retests.find((r) => r.id === log.resourceId) || null;
+      break;
+  }
+  return {
+    ...log,
+    clock: clock ? { id: clock.id, code: clock.code } : null,
+    resource
+  };
+}
+
+function listAuditLogsByClock(db, clockId) {
+  return (db.auditLogs || [])
+    .filter((log) => log.clockId === clockId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((log) => enrichAuditLog(db, log));
+}
+
+function listAllAuditLogs(db) {
+  return (db.auditLogs || [])
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((log) => enrichAuditLog(db, log));
+}
+
 function getRecentRetests(db, clockId) {
   const count = HEALTH_SCORE_RULES.recentRetestCount;
   return db.retests
@@ -745,8 +899,53 @@ async function handle(req, res) {
       createdAt: new Date().toISOString()
     };
     db.clocks.push(clock);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+      resourceId: clock.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: extractKeyFields(clock, CLOCK_KEY_FIELDS),
+      changedFields: null
+    });
     await writeDb(db);
     return send(res, 201, { data: clockSummary(db, clock) });
+  }
+
+  const clockUpdateMatch = pathname.match(/^\/clocks\/([^/]+)$/);
+  if (clockUpdateMatch && req.method === "PUT") {
+    const clock = findClock(db, clockUpdateMatch[1]);
+    const body = await parseBody(req);
+
+    const beforeKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
+
+    if (body.code !== undefined) clock.code = body.code;
+    if (body.escapementType !== undefined) clock.escapementType = body.escapementType;
+    if (body.balanceFrequency !== undefined) clock.balanceFrequency = body.balanceFrequency;
+    if (body.targetDailyRateSeconds !== undefined) clock.targetDailyRateSeconds = Number(body.targetDailyRateSeconds);
+    if (body.note !== undefined) clock.note = body.note || "";
+    clock.updatedAt = new Date().toISOString();
+
+    const afterKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
+    const changedFields = summarizeFieldChanges(beforeKeySnapshot, afterKeySnapshot, CLOCK_KEY_FIELDS);
+
+    if (changedFields) {
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.CLOCK_UPDATE,
+        resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+        resourceId: clock.id,
+        clockId: clock.id,
+        beforeSnapshot: beforeKeySnapshot,
+        afterSnapshot: afterKeySnapshot,
+        changedFields
+      });
+    }
+
+    await writeDb(db);
+    return send(res, 200, {
+      data: clockSummary(db, clock),
+      auditChanged: changedFields ? changedFields.map((f) => f.field) : []
+    });
   }
 
   if (req.method === "POST" && pathname === "/clocks/import/preview") {
@@ -782,6 +981,15 @@ async function handle(req, res) {
     for (const { item } of importable) {
       const clock = buildClockFromItem(item);
       db.clocks.push(clock);
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
+        resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+        resourceId: clock.id,
+        clockId: clock.id,
+        beforeSnapshot: null,
+        afterSnapshot: extractKeyFields(clock, CLOCK_KEY_FIELDS),
+        changedFields: null
+      });
       created.push(clock);
     }
     await writeDb(db);
@@ -835,6 +1043,66 @@ async function handle(req, res) {
     return send(res, 200, { data: { clock, adjustments, retests, handovers, retestTasks, latestRetest: latestRetest(db, clock.id) } });
   }
 
+  const auditLogsByClockMatch = pathname.match(/^\/clocks\/([^/]+)\/audit-logs$/);
+  if (auditLogsByClockMatch && req.method === "GET") {
+    const clock = findClock(db, auditLogsByClockMatch[1]);
+    const logs = listAuditLogsByClock(db, clock.id);
+
+    const operationTypeLabels = {
+      [AUDIT_OPERATION_TYPES.CLOCK_CREATE]: "创建档案",
+      [AUDIT_OPERATION_TYPES.CLOCK_UPDATE]: "更新档案",
+      [AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE]: "新增调校",
+      [AUDIT_OPERATION_TYPES.RETEST_CREATE]: "新增复测"
+    };
+
+    const timeline = logs.map((log) => ({
+      ...log,
+      operationLabel: operationTypeLabels[log.operationType] || log.operationType
+    }));
+
+    const stats = {
+      clockCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_CREATE).length,
+      clockUpdate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_UPDATE).length,
+      adjustmentCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE).length,
+      retestCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_CREATE).length
+    };
+
+    return send(res, 200, {
+      data: {
+        clock: { id: clock.id, code: clock.code, escapementType: clock.escapementType, balanceFrequency: clock.balanceFrequency },
+        timeline,
+        total: logs.length,
+        stats,
+        operationTypeLabels,
+        keyFields: CLOCK_KEY_FIELDS,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/audit-logs") {
+    const operationType = url.searchParams.get("operationType");
+    const resourceType = url.searchParams.get("resourceType");
+    const clockId = url.searchParams.get("clockId");
+    let data = listAllAuditLogs(db);
+    if (operationType) {
+      data = data.filter((log) => log.operationType === operationType);
+    }
+    if (resourceType) {
+      data = data.filter((log) => log.resourceType === resourceType);
+    }
+    if (clockId) {
+      data = data.filter((log) => log.clockId === clockId);
+    }
+    return send(res, 200, {
+      data,
+      total: data.length,
+      operationTypes: AUDIT_OPERATION_TYPES,
+      resourceTypes: AUDIT_RESOURCE_TYPES,
+      keyFields: CLOCK_KEY_FIELDS
+    });
+  }
+
   const healthScoreMatch = pathname.match(/^\/clocks\/([^/]+)\/health-score$/);
   if (healthScoreMatch && req.method === "GET") {
     const clock = findClock(db, healthScoreMatch[1]);
@@ -856,6 +1124,21 @@ async function handle(req, res) {
       createdAt: new Date().toISOString()
     };
     db.adjustments.push(adjustment);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
+      resourceId: adjustment.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: adjustment.id,
+        currentDailyRateSeconds: adjustment.currentDailyRateSeconds,
+        direction: adjustment.direction,
+        amount: adjustment.amount,
+        note: adjustment.note
+      },
+      changedFields: null
+    });
     await writeDb(db);
     return send(res, 201, { data: adjustment });
   }
@@ -899,6 +1182,23 @@ async function handle(req, res) {
       note: body.note || ""
     };
     db.retests.push(retest);
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.RETEST,
+      resourceId: retest.id,
+      clockId: clock.id,
+      beforeSnapshot: null,
+      afterSnapshot: {
+        id: retest.id,
+        adjustmentId: retest.adjustmentId,
+        testedAt: retest.testedAt,
+        dailyRateSeconds: retest.dailyRateSeconds,
+        amplitude: retest.amplitude,
+        qualified: retest.qualified,
+        note: retest.note
+      },
+      changedFields: null
+    });
     if (db.retestTasks) {
       let matchingTask = targetTask;
       if (!matchingTask) {
