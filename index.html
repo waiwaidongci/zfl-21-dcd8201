@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>钟表调校管理系统 - 交接流程</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+.header { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .user-info { display: flex; align-items: center; gap: 12px; }
+.header .user-info select { padding: 6px 12px; border-radius: 6px; border: 1px solid #444; background: #2a2a4a; color: #fff; font-size: 14px; }
+.header .role-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.role-admin { background: #e74c3c; }
+.role-technician { background: #3498db; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; background: #fff; border-radius: 8px; padding: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.tab { padding: 10px 20px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 14px; color: #666; transition: all 0.2s; }
+.tab.active { background: #1a1a2e; color: #fff; }
+.tab:hover:not(.active) { background: #f0f0f0; }
+.card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.card-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.btn-primary { background: #1a1a2e; color: #fff; }
+.btn-primary:hover { background: #2a2a4e; }
+.btn-danger { background: #e74c3c; color: #fff; }
+.btn-danger:hover { background: #c0392b; }
+.btn-success { background: #27ae60; color: #fff; }
+.btn-success:hover { background: #219a52; }
+.btn-outline { background: transparent; border: 1px solid #ddd; color: #666; }
+.btn-outline:hover { border-color: #1a1a2e; color: #1a1a2e; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+th { background: #f8f9fa; font-weight: 600; color: #555; white-space: nowrap; }
+tr:hover { background: #fafbfc; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: #555; }
+.form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; transition: border-color 0.2s; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #1a1a2e; box-shadow: 0 0 0 2px rgba(26,26,46,0.1); }
+.form-group textarea { min-height: 60px; resize: vertical; }
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.modal-overlay.show { display: flex; }
+.modal { background: #fff; border-radius: 12px; padding: 24px; width: 520px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+.modal-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+.timeline { position: relative; padding-left: 28px; }
+.timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: #e0e0e0; }
+.timeline-item { position: relative; margin-bottom: 20px; }
+.timeline-item::before { content: ''; position: absolute; left: -24px; top: 4px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid; background: #fff; }
+.timeline-item.type-handover::before { border-color: #3498db; background: #ebf5fb; }
+.timeline-item.type-technician_assign::before { border-color: #e67e22; background: #fef5e7; }
+.timeline-item .timeline-time { font-size: 12px; color: #999; margin-bottom: 4px; }
+.timeline-item .timeline-summary { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.timeline-item .timeline-detail { font-size: 13px; color: #666; background: #f8f9fa; padding: 10px; border-radius: 6px; }
+.timeline-item .timeline-detail p { margin-bottom: 4px; }
+.timeline-item .timeline-detail p:last-child { margin-bottom: 0; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.tag-handover { background: #ebf5fb; color: #2980b9; }
+.tag-assign { background: #fef5e7; color: #e67e22; }
+.empty-state { text-align: center; padding: 40px; color: #999; }
+.loading { text-align: center; padding: 20px; color: #999; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.status-active { background: #27ae60; }
+.status-inactive { background: #ccc; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🕐 钟表调校管理系统</h1>
+  <div class="user-info">
+    <span id="roleBadge" class="role-badge"></span>
+    <select id="userSelect" onchange="switchUser()"></select>
+  </div>
+</div>
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('clocks')">钟表列表</button>
+    <button class="tab" onclick="showTab('handover')">交接管理</button>
+    <button class="tab" onclick="showTab('timeline')">交接时间线</button>
+  </div>
+  <div id="tab-clocks"></div>
+  <div id="tab-handover" style="display:none"></div>
+  <div id="tab-timeline" style="display:none"></div>
+</div>
+<div class="modal-overlay" id="assignModal">
+  <div class="modal">
+    <div class="modal-title">分配钟表 & 交接</div>
+    <div id="assignForm"></div>
+  </div>
+</div>
+<div class="modal-overlay" id="handoverModal">
+  <div class="modal">
+    <div class="modal-title">创建交接记录</div>
+    <div id="handoverForm"></div>
+  </div>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:3021';
+let currentUser = null;
+let allUsers = [];
+let allClocks = [];
+
+async function api(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (currentUser) headers['X-User-Id'] = currentUser.id;
+  const res = await fetch(API + path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+
+async function init() {
+  try {
+    const usersRes = await api('/users');
+    allUsers = usersRes.data;
+    const select = document.getElementById('userSelect');
+    select.innerHTML = allUsers.map(u => `<option value="${u.id}">${u.name} (${u.role === 'admin' ? '管理员' : '技师'})</option>`).join('');
+    select.value = allUsers[1]?.id || allUsers[0]?.id;
+    await switchUser();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function switchUser() {
+  const userId = document.getElementById('userSelect').value;
+  try {
+    const res = await api('/auth/me', { headers: { 'X-User-Id': userId } });
+    currentUser = res.data;
+    const badge = document.getElementById('roleBadge');
+    badge.textContent = currentUser.role === 'admin' ? '管理员' : '技师';
+    badge.className = 'role-badge ' + (currentUser.role === 'admin' ? 'role-admin' : 'role-technician');
+    await loadClocks();
+    showTab(document.querySelector('.tab.active')?.textContent?.includes('交接管理') ? 'handover' : document.querySelector('.tab.active')?.textContent?.includes('时间线') ? 'timeline' : 'clocks');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
+  const tabMap = { clocks: 0, handover: 1, timeline: 2 };
+  document.querySelectorAll('.tab')[tabMap[name]].classList.add('active');
+  document.getElementById('tab-' + name).style.display = 'block';
+  if (name === 'handover') loadHandoverTab();
+  if (name === 'timeline') loadTimelineTab();
+}
+
+async function loadClocks() {
+  try {
+    const res = await api('/clocks');
+    allClocks = res.data;
+    renderClocks();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderClocks() {
+  const container = document.getElementById('tab-clocks');
+  const isAdmin = currentUser?.role === 'admin';
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-title">钟表列表 (${allClocks.length})</div>
+      <table>
+        <thead>
+          <tr>
+            <th>编号</th>
+            <th>擒纵类型</th>
+            <th>频率</th>
+            <th>目标日差</th>
+            <th>当前负责人</th>
+            <th>备注</th>
+            ${isAdmin ? '<th>操作</th>' : ''}
+          </tr>
+        </thead>
+        <tbody>
+          ${allClocks.map(c => `
+            <tr>
+              <td><strong>${c.code}</strong></td>
+              <td>${c.escapementType}</td>
+              <td>${c.balanceFrequency}</td>
+              <td>${c.targetDailyRateSeconds}s/天</td>
+              <td>
+                ${c.assignedTechnician
+                  ? `<span class="status-dot status-active"></span>${c.assignedTechnician.name}`
+                  : '<span class="status-dot status-inactive"></span>未分配'}
+              </td>
+              <td>${c.note || '-'}</td>
+              ${isAdmin ? `<td><button class="btn btn-primary" onclick="openAssignModal('${c.id}')">分配/交接</button></td>` : ''}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function openAssignModal(clockId) {
+  const clock = allClocks.find(c => c.id === clockId);
+  if (!clock) return;
+  const technicians = allUsers.filter(u => u.role === 'technician' || u.role === 'admin');
+  const currentTechId = clock.assignedTechnician?.id || '';
+  const form = document.getElementById('assignForm');
+  form.innerHTML = `
+    <div style="background:#f8f9fa;padding:12px;border-radius:6px;margin-bottom:16px;">
+      <strong>钟表：</strong>${clock.code} | <strong>当前负责人：</strong>${clock.assignedTechnician?.name || '无'}
+    </div>
+    <div class="form-group">
+      <label>接手人 *</label>
+      <select id="assign-technician">
+        <option value="">-- 选择接手人 --</option>
+        ${technicians.map(t => `<option value="${t.id}" ${t.id === currentTechId ? 'selected' : ''}>${t.name} (${t.role === 'admin' ? '管理员' : '技师'})</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>交接备注</label>
+      <textarea id="assign-handoverNote" placeholder="描述当前工作状态、注意事项等"></textarea>
+    </div>
+    <div class="form-group">
+      <label>下一步建议</label>
+      <textarea id="assign-nextStepSuggestion" placeholder="对接手人的工作建议"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('assignModal')">取消</button>
+      <button class="btn btn-primary" onclick="submitAssign('${clockId}')">确认分配 & 交接</button>
+    </div>
+  `;
+  document.getElementById('assignModal').classList.add('show');
+}
+
+async function submitAssign(clockId) {
+  const technicianId = document.getElementById('assign-technician').value;
+  const handoverNote = document.getElementById('assign-handoverNote').value;
+  const nextStepSuggestion = document.getElementById('assign-nextStepSuggestion').value;
+  if (!technicianId) { alert('请选择接手人'); return; }
+  try {
+    const res = await api(`/clocks/${clockId}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify({ technicianId, handoverNote, nextStepSuggestion })
+    });
+    alert(res.handover ? `已分配并生成交接记录` : `已分配`);
+    closeModal('assignModal');
+    await loadClocks();
+  } catch (e) {
+    alert('操作失败：' + e.message);
+  }
+}
+
+async function loadHandoverTab() {
+  const container = document.getElementById('tab-handover');
+  const isAdmin = currentUser?.role === 'admin';
+  container.innerHTML = '<div class="loading">加载中...</div>';
+  try {
+    let clockList = allClocks;
+    if (!isAdmin) {
+      clockList = allClocks.filter(c => c.assignedTechnician?.id === currentUser.id);
+    }
+    let html = '';
+    for (const clock of clockList) {
+      try {
+        const res = await api(`/clocks/${clock.id}/handovers`);
+        const handovers = res.data || [];
+        html += `
+          <div class="card">
+            <div class="card-title">
+              ${clock.code} - 交接记录 (${handovers.length})
+              ${isAdmin ? `<button class="btn btn-primary" style="float:right;font-size:12px;padding:4px 12px;" onclick="openHandoverModal('${clock.id}','${clock.code}')">+ 新建交接</button>` : ''}
+            </div>
+            ${handovers.length === 0 ? '<div class="empty-state">暂无交接记录</div>' : `
+              <table>
+                <thead>
+                  <tr><th>时间</th><th>交出人</th><th>接手人</th><th>交接备注</th><th>下一步建议</th><th>操作人</th></tr>
+                </thead>
+                <tbody>
+                  ${handovers.map(h => `
+                    <tr>
+                      <td>${formatTime(h.createdAt)}</td>
+                      <td>${h.previousTechnicianUser?.name || h.previousTechnicianName || '-'}</td>
+                      <td>${h.receiverUser?.name || h.receiver || '-'}</td>
+                      <td>${h.handoverNote || '-'}</td>
+                      <td>${h.nextStepSuggestion || '-'}</td>
+                      <td>${h.creator?.name || '-'}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            `}
+          </div>
+        `;
+      } catch (e) {
+        if (e.message.includes('403') || e.message.includes('无权限')) continue;
+      }
+    }
+    container.innerHTML = html || '<div class="empty-state">无可查看的交接记录</div>';
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function openHandoverModal(clockId, clockCode) {
+  const technicians = allUsers.filter(u => u.role === 'technician' || u.role === 'admin');
+  const clock = allClocks.find(c => c.id === clockId);
+  const form = document.getElementById('handoverForm');
+  form.innerHTML = `
+    <div style="background:#f8f9fa;padding:12px;border-radius:6px;margin-bottom:16px;">
+      <strong>钟表：</strong>${clockCode} | <strong>当前负责人：</strong>${clock?.assignedTechnician?.name || '无'}
+    </div>
+    <div class="form-group">
+      <label>交接备注 *</label>
+      <textarea id="handover-handoverNote" placeholder="描述当前工作状态、注意事项等"></textarea>
+    </div>
+    <div class="form-group">
+      <label>下一步建议</label>
+      <textarea id="handover-nextStepSuggestion" placeholder="对接手人的工作建议"></textarea>
+    </div>
+    <div class="form-group">
+      <label>接手人 *</label>
+      <select id="handover-receiver">
+        <option value="">-- 选择接手人 --</option>
+        ${technicians.map(t => `<option value="${t.id}">${t.name} (${t.role === 'admin' ? '管理员' : '技师'})</option>`).join('')}
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('handoverModal')">取消</button>
+      <button class="btn btn-success" onclick="submitHandover('${clockId}')">确认交接</button>
+    </div>
+  `;
+  document.getElementById('handoverModal').classList.add('show');
+}
+
+async function submitHandover(clockId) {
+  const handoverNote = document.getElementById('handover-handoverNote').value;
+  const nextStepSuggestion = document.getElementById('handover-nextStepSuggestion').value;
+  const receiverId = document.getElementById('handover-receiver').value;
+  if (!handoverNote) { alert('请填写交接备注'); return; }
+  if (!receiverId) { alert('请选择接手人'); return; }
+  const receiverUser = allUsers.find(u => u.id === receiverId);
+  try {
+    await api(`/clocks/${clockId}/handovers`, {
+      method: 'POST',
+      body: JSON.stringify({
+        handoverNote,
+        nextStepSuggestion,
+        receiver: receiverUser?.name || '',
+        receiverId
+      })
+    });
+    alert('交接成功，已自动更新负责人');
+    closeModal('handoverModal');
+    await loadClocks();
+    loadHandoverTab();
+  } catch (e) {
+    alert('操作失败：' + e.message);
+  }
+}
+
+async function loadTimelineTab() {
+  const container = document.getElementById('tab-timeline');
+  const isAdmin = currentUser?.role === 'admin';
+  container.innerHTML = '<div class="loading">加载中...</div>';
+  try {
+    let clockList = allClocks;
+    if (!isAdmin) {
+      clockList = allClocks.filter(c => c.assignedTechnician?.id === currentUser.id);
+    }
+    let html = '';
+    for (const clock of clockList) {
+      try {
+        const res = await api(`/clocks/${clock.id}/handover-timeline`);
+        const timelineData = res.data;
+        html += `
+          <div class="card">
+            <div class="card-title">
+              ${clock.code} - 负责人变更 & 交接时间线
+              <span style="font-size:12px;color:#999;font-weight:normal;margin-left:8px;">
+                交接 ${timelineData.handoverCount} 次 | 变更 ${timelineData.assignCount} 次
+              </span>
+            </div>
+            ${timelineData.timeline.length === 0 ? '<div class="empty-state">暂无记录</div>' : `
+              <div class="timeline">
+                ${timelineData.timeline.map(item => `
+                  <div class="timeline-item type-${item.type}">
+                    <div class="timeline-time">
+                      ${formatTime(item.timestamp)}
+                      <span class="tag ${item.type === 'handover' ? 'tag-handover' : 'tag-assign'}">
+                        ${item.type === 'handover' ? '师傅交接' : '负责人变更'}
+                      </span>
+                    </div>
+                    <div class="timeline-summary">${item.summary}</div>
+                    <div class="timeline-detail">
+                      ${item.type === 'handover' ? `
+                        ${item.detail.handoverNote ? `<p><strong>交接备注：</strong>${item.detail.handoverNote}</p>` : ''}
+                        ${item.detail.nextStepSuggestion ? `<p><strong>下一步建议：</strong>${item.detail.nextStepSuggestion}</p>` : ''}
+                        <p><strong>交出人：</strong>${item.detail.previousTechnicianUser?.name || item.detail.previousTechnicianName || '无'}</p>
+                        <p><strong>接手人：</strong>${item.detail.receiverUser?.name || item.detail.receiver || '无'}</p>
+                        ${item.detail.creator ? `<p><strong>操作人：</strong>${item.detail.creator.name}</p>` : ''}
+                      ` : `
+                        <p><strong>变更前：</strong>${item.detail.before?.technicianName || '无'}</p>
+                        <p><strong>变更后：</strong>${item.detail.after?.technicianName || '无'}</p>
+                        ${item.detail.creator ? `<p><strong>操作人：</strong>${item.detail.creator.name}</p>` : ''}
+                      `}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `}
+          </div>
+        `;
+      } catch (e) {
+        if (e.message.includes('403') || e.message.includes('无权限') || e.message.includes('普通技师')) continue;
+      }
+    }
+    container.innerHTML = html || '<div class="empty-state">无可查看的时间线</div>';
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state">加载失败: ${e.message}</div>`;
+  }
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
+});
+
+init();
+</script>
+</body>
+</html>

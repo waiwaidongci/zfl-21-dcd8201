@@ -158,13 +158,16 @@ const AUDIT_OPERATION_TYPES = {
   CLOCK_CREATE: "clock_create",
   CLOCK_UPDATE: "clock_update",
   ADJUSTMENT_CREATE: "adjustment_create",
-  RETEST_CREATE: "retest_create"
+  RETEST_CREATE: "retest_create",
+  HANDOVER_CREATE: "handover_create",
+  TECHNICIAN_ASSIGN: "technician_assign"
 };
 
 const AUDIT_RESOURCE_TYPES = {
   CLOCK: "clock",
   ADJUSTMENT: "adjustment",
-  RETEST: "retest"
+  RETEST: "retest",
+  HANDOVER: "handover"
 };
 
 const WORKFLOW_STATUSES = {
@@ -370,6 +373,7 @@ const routes = [
   "GET /clocks/:id/latest-retest",
   "GET /clocks/:id/handovers",
   "POST /clocks/:id/handovers",
+  "GET /clocks/:id/handover-timeline",
   "POST /clocks/:id/suggestions/generate",
   "POST /clocks/:id/suggestions",
   "GET /clocks/:id/suggestions",
@@ -1094,6 +1098,10 @@ function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSna
       return `新增调校记录，方向：${afterSnapshot?.direction || ""}，调整量：${afterSnapshot?.amount || ""}`;
     case AUDIT_OPERATION_TYPES.RETEST_CREATE:
       return `新增复测记录，日差：${afterSnapshot?.dailyRateSeconds ?? ""}秒/天，振幅：${afterSnapshot?.amplitude ?? ""}，合格：${afterSnapshot?.qualified ? "是" : "否"}`;
+    case AUDIT_OPERATION_TYPES.HANDOVER_CREATE:
+      return `交接记录：${afterSnapshot?.receiverName || afterSnapshot?.receiver || ""} 接手，备注：${afterSnapshot?.handoverNote || "无"}`;
+    case AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN:
+      return `负责人变更：${beforeSnapshot?.technicianName || "无"} → ${afterSnapshot?.technicianName || "无"}`;
     default:
       return `${operationType} ${resourceType}`;
   }
@@ -1142,6 +1150,9 @@ function enrichAuditLog(db, log) {
       break;
     case AUDIT_RESOURCE_TYPES.RETEST:
       resource = db.retests.find((r) => r.id === log.resourceId) || null;
+      break;
+    case AUDIT_RESOURCE_TYPES.HANDOVER:
+      resource = db.handovers.find((h) => h.id === log.resourceId) || null;
       break;
   }
   return {
@@ -1573,6 +1584,36 @@ function migrateDbAddRetestTaskCancelFields(db) {
   return changed;
 }
 
+function migrateDbAddHandoverFields(db) {
+  let changed = false;
+  if (db.handovers) {
+    for (const item of db.handovers) {
+      if (!item.receiverId) {
+        const receiverUser = db.users.find((u) => u.name === item.receiver || u.username === item.receiver);
+        if (receiverUser) {
+          item.receiverId = receiverUser.id;
+        } else {
+          item.receiverId = null;
+        }
+        changed = true;
+      }
+      if (!item.previousTechnicianId) {
+        const clock = db.clocks.find((c) => c.id === item.clockId);
+        if (clock) {
+          item.previousTechnicianId = null;
+          const previousUser = db.users.find((u) => u.id === clock.assignedTechnicianId);
+          item.previousTechnicianName = previousUser ? previousUser.name : "";
+        } else {
+          item.previousTechnicianId = null;
+          item.previousTechnicianName = "";
+        }
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 async function ensureDb() {
   await mkdir(path.dirname(DB_FILE), { recursive: true });
   let dbData;
@@ -1584,11 +1625,12 @@ async function ensureDb() {
   }
   const needsMigration1 = migrateDbAddCreatedBy(dbData);
   const needsMigration2 = migrateDbAddRetestTaskCancelFields(dbData);
+  const needsMigration3 = migrateDbAddHandoverFields(dbData);
   if (!dbData.users || dbData.users.length === 0) {
     dbData.users = [...initialData.users];
     migrateDbAddCreatedBy(dbData);
   }
-  if (needsMigration1 || needsMigration2 || !dbData.users) {
+  if (needsMigration1 || needsMigration2 || needsMigration3 || !dbData.users) {
     await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
   }
 }
@@ -1707,6 +1749,19 @@ async function handle(req, res) {
   const pathname = url.pathname;
   const db = await readDb();
   const currentUser = getCurrentUser(req, db);
+
+  if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+    try {
+      const html = await readFile(path.join(__dirname, "index.html"), "utf8");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    } catch {
+      const error = new Error("前端页面未找到");
+      error.status = 404;
+      throw error;
+    }
+  }
 
   if (req.method === "GET" && pathname === "/health") {
     return send(res, 200, { ok: true, service: "clock-escapement-tuning-api", routes, authEnabled: true });
@@ -1947,7 +2002,13 @@ async function handle(req, res) {
     requireAdmin(req, db);
     const clock = findClock(db, clockAssignMatch[1]);
     const body = await parseBody(req);
-    const { technicianId } = body;
+    const { technicianId, handoverNote, nextStepSuggestion } = body;
+
+    const previousTechnicianId = clock.assignedTechnicianId;
+    const previousTechnician = previousTechnicianId
+      ? db.users.find((u) => u.id === previousTechnicianId)
+      : null;
+
     if (technicianId) {
       const tech = db.users.find((u) => u.id === technicianId);
       if (!tech) {
@@ -1961,13 +2022,86 @@ async function handle(req, res) {
         throw error;
       }
     }
+
+    const technicianChanged = previousTechnicianId !== (technicianId || null);
+    let handoverRecord = null;
+
+    if (technicianChanged && technicianId) {
+      const receiverUser = db.users.find((u) => u.id === technicianId);
+      handoverRecord = {
+        id: makeId("handover"),
+        clockId: clock.id,
+        handoverNote: handoverNote || "",
+        nextStepSuggestion: nextStepSuggestion || "",
+        receiver: receiverUser ? receiverUser.name : "",
+        receiverId: technicianId,
+        previousTechnicianId: previousTechnicianId || null,
+        previousTechnicianName: previousTechnician ? previousTechnician.name : "",
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id
+      };
+      db.handovers.push(handoverRecord);
+
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.HANDOVER_CREATE,
+        resourceType: AUDIT_RESOURCE_TYPES.HANDOVER,
+        resourceId: handoverRecord.id,
+        clockId: clock.id,
+        beforeSnapshot: {
+          previousTechnicianId: previousTechnicianId || null,
+          previousTechnicianName: previousTechnician ? previousTechnician.name : ""
+        },
+        afterSnapshot: {
+          receiverId: technicianId,
+          receiverName: receiverUser ? receiverUser.name : "",
+          handoverNote: handoverNote || "",
+          nextStepSuggestion: nextStepSuggestion || ""
+        },
+        changedFields: null,
+        createdBy: currentUser.id
+      });
+    }
+
     clock.assignedTechnicianId = technicianId || null;
     clock.updatedAt = new Date().toISOString();
+
+    if (technicianChanged) {
+      const newTechnician = technicianId ? db.users.find((u) => u.id === technicianId) : null;
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN,
+        resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+        resourceId: clock.id,
+        clockId: clock.id,
+        beforeSnapshot: {
+          technicianId: previousTechnicianId || null,
+          technicianName: previousTechnician ? previousTechnician.name : "无"
+        },
+        afterSnapshot: {
+          technicianId: technicianId || null,
+          technicianName: newTechnician ? newTechnician.name : "无"
+        },
+        changedFields: [
+          {
+            field: "assignedTechnicianId",
+            before: previousTechnicianId || null,
+            after: technicianId || null
+          }
+        ],
+        createdBy: currentUser.id
+      });
+    }
+
     await writeDb(db);
-    return send(res, 200, {
+    const result = {
       data: clockSummary(db, clock),
-      message: technicianId ? `已分配给 ${db.users.find(u => u.id === technicianId).name}` : "已取消分配"
-    });
+      message: technicianId
+        ? `已分配给 ${db.users.find((u) => u.id === technicianId).name}`
+        : "已取消分配"
+    };
+    if (handoverRecord) {
+      result.handover = enrichWithCreator(db, handoverRecord);
+    }
+    return send(res, 200, result);
   }
 
   if (req.method === "POST" && pathname === "/clocks/import/preview") {
@@ -2155,9 +2289,25 @@ async function handle(req, res) {
     }
     const adjustments = db.adjustments.filter((item) => item.clockId === clock.id).map((a) => enrichWithCreator(db, a));
     const retests = db.retests.filter((item) => item.clockId === clock.id).map((r) => enrichWithCreator(db, r));
-    const handovers = listHandovers(db, clock.id).map((h) => enrichWithCreator(db, h));
+    const handovers = listHandovers(db, clock.id).map((h) => {
+      const enriched = enrichWithCreator(db, h);
+      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
+      if (receiverUser) {
+        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
+      }
+      const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
+      if (previousUser) {
+        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
+      }
+      return enriched;
+    });
     const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id).map((t) => enrichRetestTask(db, t));
-    return send(res, 200, { data: { clock: clockSummary(db, clock), adjustments, retests, handovers, retestTasks, latestRetest: enrichWithCreator(db, latestRetest(db, clock.id)) } });
+
+    const assignAuditLogs = (db.auditLogs || [])
+      .filter((log) => log.clockId === clock.id && log.operationType === AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN)
+      .map((log) => enrichWithCreator(db, log));
+
+    return send(res, 200, { data: { clock: clockSummary(db, clock), adjustments, retests, handovers, retestTasks, assignAuditLogs, latestRetest: enrichWithCreator(db, latestRetest(db, clock.id)) } });
   }
 
   const auditLogsByClockMatch = pathname.match(/^\/clocks\/([^/]+)\/audit-logs$/);
@@ -2176,7 +2326,9 @@ async function handle(req, res) {
       [AUDIT_OPERATION_TYPES.CLOCK_CREATE]: "创建档案",
       [AUDIT_OPERATION_TYPES.CLOCK_UPDATE]: "更新档案",
       [AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE]: "新增调校",
-      [AUDIT_OPERATION_TYPES.RETEST_CREATE]: "新增复测"
+      [AUDIT_OPERATION_TYPES.RETEST_CREATE]: "新增复测",
+      [AUDIT_OPERATION_TYPES.HANDOVER_CREATE]: "师傅交接",
+      [AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN]: "负责人变更"
     };
 
     const timeline = logs.map((log) => ({
@@ -2188,7 +2340,9 @@ async function handle(req, res) {
       clockCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_CREATE).length,
       clockUpdate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_UPDATE).length,
       adjustmentCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE).length,
-      retestCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_CREATE).length
+      retestCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_CREATE).length,
+      handoverCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.HANDOVER_CREATE).length,
+      technicianAssign: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN).length
     };
 
     return send(res, 200, {
@@ -2754,12 +2908,33 @@ async function handle(req, res) {
     requireAuth(req, db);
     const clock = findClock(db, handoverListMatch[1]);
     if (!canAccessClock(clock, currentUser)) {
-      const error = new Error("无权限访问该钟表档案");
-      error.status = 403;
-      error.code = "FORBIDDEN";
-      throw error;
+      if (currentUser.role === USER_ROLES.TECHNICIAN) {
+        const hasHistory = clock.assignedTechnicianId === currentUser.id;
+        if (!hasHistory) {
+          const error = new Error("普通技师只能查看自己当前负责钟表的交接历史");
+          error.status = 403;
+          error.code = "FORBIDDEN";
+          throw error;
+        }
+      } else {
+        const error = new Error("无权限访问该钟表档案");
+        error.status = 403;
+        error.code = "FORBIDDEN";
+        throw error;
+      }
     }
-    const data = listHandovers(db, clock.id).map((h) => enrichWithCreator(db, h));
+    const data = listHandovers(db, clock.id).map((h) => {
+      const enriched = enrichWithCreator(db, h);
+      const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
+      if (receiverUser) {
+        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
+      }
+      const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
+      if (previousUser) {
+        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
+      }
+      return enriched;
+    });
     return send(res, 200, { data, total: data.length });
   }
 
@@ -2769,18 +2944,161 @@ async function handle(req, res) {
     const clock = findClock(db, handoverCreateMatch[1]);
     const body = await parseBody(req);
     required(body, ["handoverNote", "receiver"]);
+
+    let receiverId = body.receiverId || null;
+    let receiverName = body.receiver;
+    if (!receiverId) {
+      const receiverUser = db.users.find((u) => u.name === body.receiver || u.username === body.receiver);
+      if (receiverUser) {
+        receiverId = receiverUser.id;
+        receiverName = receiverUser.name;
+      }
+    }
+
+    const previousTechnicianId = clock.assignedTechnicianId || null;
+    const previousTechnician = previousTechnicianId
+      ? db.users.find((u) => u.id === previousTechnicianId)
+      : null;
+
     const handover = {
       id: makeId("handover"),
       clockId: clock.id,
       handoverNote: body.handoverNote,
       nextStepSuggestion: body.nextStepSuggestion || "",
-      receiver: body.receiver,
+      receiver: receiverName,
+      receiverId: receiverId,
+      previousTechnicianId: previousTechnicianId,
+      previousTechnicianName: previousTechnician ? previousTechnician.name : "",
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id
     };
     db.handovers.push(handover);
+
+    if (receiverId && receiverId !== clock.assignedTechnicianId) {
+      clock.assignedTechnicianId = receiverId;
+      clock.updatedAt = new Date().toISOString();
+
+      createAuditLog(db, {
+        operationType: AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN,
+        resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+        resourceId: clock.id,
+        clockId: clock.id,
+        beforeSnapshot: {
+          technicianId: previousTechnicianId,
+          technicianName: previousTechnician ? previousTechnician.name : "无"
+        },
+        afterSnapshot: {
+          technicianId: receiverId,
+          technicianName: receiverName
+        },
+        changedFields: [
+          {
+            field: "assignedTechnicianId",
+            before: previousTechnicianId,
+            after: receiverId
+          }
+        ],
+        createdBy: currentUser.id
+      });
+    }
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.HANDOVER_CREATE,
+      resourceType: AUDIT_RESOURCE_TYPES.HANDOVER,
+      resourceId: handover.id,
+      clockId: clock.id,
+      beforeSnapshot: {
+        previousTechnicianId: previousTechnicianId,
+        previousTechnicianName: previousTechnician ? previousTechnician.name : ""
+      },
+      afterSnapshot: {
+        receiverId: receiverId,
+        receiverName: receiverName,
+        handoverNote: body.handoverNote,
+        nextStepSuggestion: body.nextStepSuggestion || ""
+      },
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+
     await writeDb(db);
-    return send(res, 201, { data: enrichWithCreator(db, handover) });
+    return send(res, 201, { data: enrichWithCreator(db, handover), clock: clockSummary(db, clock) });
+  }
+
+  const handoverTimelineMatch = pathname.match(/^\/clocks\/([^/]+)\/handover-timeline$/);
+  if (handoverTimelineMatch && req.method === "GET") {
+    requireAuth(req, db);
+    const clock = findClock(db, handoverTimelineMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      if (currentUser.role === USER_ROLES.TECHNICIAN) {
+        if (clock.assignedTechnicianId !== currentUser.id) {
+          const error = new Error("普通技师只能查看自己当前负责钟表的交接历史");
+          error.status = 403;
+          error.code = "FORBIDDEN";
+          throw error;
+        }
+      } else {
+        const error = new Error("无权限访问该钟表档案");
+        error.status = 403;
+        error.code = "FORBIDDEN";
+        throw error;
+      }
+    }
+
+    const handoverEvents = db.handovers
+      .filter((h) => h.clockId === clock.id)
+      .map((h) => {
+        const creator = db.users.find((u) => u.id === h.createdBy) || null;
+        const receiverUser = h.receiverId ? db.users.find((u) => u.id === h.receiverId) : null;
+        const previousUser = h.previousTechnicianId ? db.users.find((u) => u.id === h.previousTechnicianId) : null;
+        return {
+          id: h.id,
+          type: "handover",
+          timestamp: h.createdAt,
+          summary: `${previousUser ? previousUser.name : "无"} → ${h.receiver || "无"}`,
+          detail: {
+            handoverNote: h.handoverNote,
+            nextStepSuggestion: h.nextStepSuggestion,
+            receiver: h.receiver,
+            receiverId: h.receiverId,
+            receiverUser: receiverUser ? { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role } : null,
+            previousTechnicianName: h.previousTechnicianName || previousUser?.name || "",
+            previousTechnicianId: h.previousTechnicianId,
+            previousTechnicianUser: previousUser ? { id: previousUser.id, name: previousUser.name, role: previousUser.role } : null,
+            creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
+          }
+        };
+      });
+
+    const assignEvents = (db.auditLogs || [])
+      .filter((log) => log.clockId === clock.id && log.operationType === AUDIT_OPERATION_TYPES.TECHNICIAN_ASSIGN)
+      .map((log) => {
+        const creator = db.users.find((u) => u.id === log.createdBy) || null;
+        return {
+          id: log.id,
+          type: "technician_assign",
+          timestamp: log.createdAt,
+          summary: log.summary,
+          detail: {
+            before: log.beforeSnapshot,
+            after: log.afterSnapshot,
+            creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
+          }
+        };
+      });
+
+    const timeline = [...handoverEvents, ...assignEvents]
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    return send(res, 200, {
+      data: {
+        clock: { id: clock.id, code: clock.code, assignedTechnicianId: clock.assignedTechnicianId },
+        timeline,
+        total: timeline.length,
+        handoverCount: handoverEvents.length,
+        assignCount: assignEvents.length
+      }
+    });
   }
 
   if (req.method === "GET" && pathname === "/adjustments") {
@@ -3013,7 +3331,18 @@ async function handle(req, res) {
       const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
       data = data.filter((item) => accessibleClockIds.has(item.clockId));
     }
-    data = data.map((item) => enrichWithCreator(db, item));
+    data = data.map((item) => {
+      const enriched = enrichWithCreator(db, item);
+      const receiverUser = item.receiverId ? db.users.find((u) => u.id === item.receiverId) : null;
+      if (receiverUser) {
+        enriched.receiverUser = { id: receiverUser.id, name: receiverUser.name, role: receiverUser.role };
+      }
+      const previousUser = item.previousTechnicianId ? db.users.find((u) => u.id === item.previousTechnicianId) : null;
+      if (previousUser) {
+        enriched.previousTechnicianUser = { id: previousUser.id, name: previousUser.name, role: previousUser.role };
+      }
+      return enriched;
+    });
     return send(res, 200, { data, total: data.length });
   }
 

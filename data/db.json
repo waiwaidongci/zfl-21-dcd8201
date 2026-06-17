@@ -37,9 +37,10 @@
       "balanceFrequency": "18000vph",
       "targetDailyRateSeconds": 20,
       "note": "怀表机芯，走时偏快",
-      "assignedTechnicianId": "user_admin_default",
+      "assignedTechnicianId": "user_tech_zhang",
       "createdAt": "2026-06-16T00:00:00.000Z",
-      "createdBy": "user_system"
+      "createdBy": "user_system",
+      "updatedAt": "2026-06-17T06:08:25.467Z"
     },
     {
       "id": "clock_mqgsbyvj_tr66gb",
@@ -119,7 +120,22 @@
       "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
       "receiver": "王师傅",
       "createdAt": "2026-06-16T00:00:00.000Z",
-      "createdBy": "user_system"
+      "createdBy": "user_system",
+      "receiverId": "user_tech_wang",
+      "previousTechnicianId": null,
+      "previousTechnicianName": "张师傅"
+    },
+    {
+      "id": "handover_mqho6u0r_tzuppk",
+      "clockId": "clock_demo",
+      "handoverNote": "机芯已清洗完毕，游丝轻微变形需注意",
+      "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
+      "receiver": "张师傅",
+      "receiverId": "user_tech_zhang",
+      "previousTechnicianId": "user_admin_default",
+      "previousTechnicianName": "管理员",
+      "createdAt": "2026-06-17T06:08:25.467Z",
+      "createdBy": "user_admin_default"
     }
   ],
   "retestTasks": [
@@ -210,5 +226,52 @@
       "createdBy": "user_system"
     }
   ],
-  "auditLogs": []
+  "auditLogs": [
+    {
+      "id": "audit_mqho6u0r_lj9y6l",
+      "operationType": "handover_create",
+      "resourceType": "handover",
+      "resourceId": "handover_mqho6u0r_tzuppk",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "previousTechnicianId": "user_admin_default",
+        "previousTechnicianName": "管理员"
+      },
+      "afterSnapshot": {
+        "receiverId": "user_tech_zhang",
+        "receiverName": "张师傅",
+        "handoverNote": "机芯已清洗完毕，游丝轻微变形需注意",
+        "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试"
+      },
+      "changedFields": null,
+      "summary": "交接记录：张师傅 接手，备注：机芯已清洗完毕，游丝轻微变形需注意",
+      "createdAt": "2026-06-17T06:08:25.467Z",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqho6u0r_x4bjs3",
+      "operationType": "technician_assign",
+      "resourceType": "clock",
+      "resourceId": "clock_demo",
+      "clockId": "clock_demo",
+      "beforeSnapshot": {
+        "technicianId": "user_admin_default",
+        "technicianName": "管理员"
+      },
+      "afterSnapshot": {
+        "technicianId": "user_tech_zhang",
+        "technicianName": "张师傅"
+      },
+      "changedFields": [
+        {
+          "field": "assignedTechnicianId",
+          "before": "user_admin_default",
+          "after": "user_tech_zhang"
+        }
+      ],
+      "summary": "负责人变更：管理员 → 张师傅",
+      "createdAt": "2026-06-17T06:08:25.467Z",
+      "createdBy": "user_admin_default"
+    }
+  ]
 }
