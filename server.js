@@ -1389,12 +1389,14 @@ function calculateHealthScore(db, clock) {
   const recentRetests = getRecentRetests(db, clock.id, rules);
 
   if (recentRetests.length < rules.minRetestCount) {
+    const conclusionKey = "insufficient";
     return {
       clockId: clock.id,
       clockCode: clock.code,
       escapementType: clock.escapementType,
       totalScore: null,
-      conclusion: rules.conclusions.insufficient,
+      conclusion: rules.conclusions[conclusionKey],
+      conclusionKey,
       details: {
         retestCount: recentRetests.length,
         minRequired: rules.minRetestCount
@@ -1419,14 +1421,15 @@ function calculateHealthScore(db, clock) {
 
   const totalScore = dailyRateResult.score + amplitudeResult.score + consecutiveResult.score;
 
-  let conclusion;
+  let conclusionKey;
   if (totalScore >= rules.thresholds.stable) {
-    conclusion = rules.conclusions.stable;
+    conclusionKey = "stable";
   } else if (totalScore >= rules.thresholds.observe) {
-    conclusion = rules.conclusions.observe;
+    conclusionKey = "observe";
   } else {
-    conclusion = rules.conclusions.rework;
+    conclusionKey = "rework";
   }
+  const conclusion = rules.conclusions[conclusionKey];
 
   const suggestions = [];
   if (dailyRateResult.level === "poor" || dailyRateResult.level === "fair") {
@@ -1451,6 +1454,7 @@ function calculateHealthScore(db, clock) {
     escapementType: clock.escapementType,
     totalScore,
     conclusion,
+    conclusionKey,
     details: {
       retestCount: recentRetests.length,
       dailyRateStability: {
@@ -2562,19 +2566,21 @@ async function handle(req, res) {
   if (req.method === "GET" && pathname === "/clocks/health-scores") {
     requireAuth(req, db);
     const conclusion = url.searchParams.get("conclusion");
+    const conclusionKeyParam = url.searchParams.get("conclusionKey");
     const accessibleClocks = filterClocksByUser(db, currentUser);
     const data = accessibleClocks.map((clock) => calculateHealthScore(db, clock));
     let filtered = data;
-    if (conclusion) {
+    if (conclusionKeyParam) {
+      filtered = data.filter((item) => item.conclusionKey === conclusionKeyParam);
+    } else if (conclusion) {
       filtered = data.filter((item) => item.conclusion === conclusion);
     }
-    const defaultConclusions = HEALTH_SCORE_RULES.conclusions;
     const summary = {
       total: accessibleClocks.length,
-      stable: filtered.filter((item) => item.conclusion === defaultConclusions.stable).length,
-      observe: filtered.filter((item) => item.conclusion === defaultConclusions.observe).length,
-      rework: filtered.filter((item) => item.conclusion === defaultConclusions.rework).length,
-      insufficient: filtered.filter((item) => item.conclusion === defaultConclusions.insufficient).length
+      stable: filtered.filter((item) => item.conclusionKey === "stable").length,
+      observe: filtered.filter((item) => item.conclusionKey === "observe").length,
+      rework: filtered.filter((item) => item.conclusionKey === "rework").length,
+      insufficient: filtered.filter((item) => item.conclusionKey === "insufficient").length
     };
     return send(res, 200, {
       summary,

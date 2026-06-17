@@ -110,6 +110,28 @@
       "qualified": true,
       "note": "精确指定任务复测",
       "createdBy": "user_system"
+    },
+    {
+      "id": "retest_mqhsx87b_jlabec",
+      "clockId": "clock_mqgsbyvj_tr66gb",
+      "adjustmentId": null,
+      "testedAt": "2026-06-17T08:20:55.367Z",
+      "dailyRateSeconds": 25,
+      "amplitude": 260,
+      "qualified": true,
+      "note": "",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "retest_mqhsx880_dy2kaq",
+      "clockId": "clock_mqgsbyvj_tr66gb",
+      "adjustmentId": null,
+      "testedAt": "2026-06-17T08:20:55.392Z",
+      "dailyRateSeconds": 22,
+      "amplitude": 255,
+      "qualified": true,
+      "note": "",
+      "createdBy": "user_admin_default"
     }
   ],
   "handovers": [
@@ -330,6 +352,48 @@
       "summary": "交接记录：王师傅 接手，备注：张师傅完成初步调校，建议接手人复测游丝",
       "createdAt": "2026-06-17T06:27:31.738Z",
       "createdBy": "user_tech_zhang"
+    },
+    {
+      "id": "audit_mqhsx87c_xohngg",
+      "operationType": "retest_create",
+      "resourceType": "retest",
+      "resourceId": "retest_mqhsx87b_jlabec",
+      "clockId": "clock_mqgsbyvj_tr66gb",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "id": "retest_mqhsx87b_jlabec",
+        "adjustmentId": null,
+        "testedAt": "2026-06-17T08:20:55.367Z",
+        "dailyRateSeconds": 25,
+        "amplitude": 260,
+        "qualified": true,
+        "note": ""
+      },
+      "changedFields": null,
+      "summary": "新增复测记录，日差：25秒/天，振幅：260，合格：是",
+      "createdAt": "2026-06-17T08:20:55.368Z",
+      "createdBy": "user_admin_default"
+    },
+    {
+      "id": "audit_mqhsx880_fohgi1",
+      "operationType": "retest_create",
+      "resourceType": "retest",
+      "resourceId": "retest_mqhsx880_dy2kaq",
+      "clockId": "clock_mqgsbyvj_tr66gb",
+      "beforeSnapshot": null,
+      "afterSnapshot": {
+        "id": "retest_mqhsx880_dy2kaq",
+        "adjustmentId": null,
+        "testedAt": "2026-06-17T08:20:55.392Z",
+        "dailyRateSeconds": 22,
+        "amplitude": 255,
+        "qualified": true,
+        "note": ""
+      },
+      "changedFields": null,
+      "summary": "新增复测记录，日差：22秒/天，振幅：255，合格：是",
+      "createdAt": "2026-06-17T08:20:55.392Z",
+      "createdBy": "user_admin_default"
     }
   ],
   "healthScoreRules": []
