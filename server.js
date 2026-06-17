@@ -13,6 +13,7 @@ const BACKUP_ERROR_CODES = {
 };
 
 const DB_SCHEMA = {
+  users: "array",
   clocks: "array",
   adjustments: "array",
   retests: "array",
@@ -22,7 +23,45 @@ const DB_SCHEMA = {
   auditLogs: "array"
 };
 
+const USER_ROLES = {
+  ADMIN: "admin",
+  TECHNICIAN: "technician"
+};
+
+const DEFAULT_SYSTEM_USER_ID = "user_system";
+const DEFAULT_ADMIN_USER_ID = "user_admin_default";
+
 const initialData = {
+  users: [
+    {
+      id: DEFAULT_SYSTEM_USER_ID,
+      username: "system",
+      name: "系统",
+      role: USER_ROLES.ADMIN,
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: DEFAULT_ADMIN_USER_ID,
+      username: "admin",
+      name: "管理员",
+      role: USER_ROLES.ADMIN,
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: "user_tech_zhang",
+      username: "zhang",
+      name: "张师傅",
+      role: USER_ROLES.TECHNICIAN,
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: "user_tech_wang",
+      username: "wang",
+      name: "王师傅",
+      role: USER_ROLES.TECHNICIAN,
+      createdAt: new Date().toISOString()
+    }
+  ],
   clocks: [
     {
       id: "clock_demo",
@@ -31,7 +70,9 @@ const initialData = {
       balanceFrequency: "18000vph",
       targetDailyRateSeconds: 20,
       note: "怀表机芯，走时偏快",
-      createdAt: new Date().toISOString()
+      assignedTechnicianId: "user_tech_zhang",
+      createdAt: new Date().toISOString(),
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ],
   adjustments: [
@@ -42,7 +83,8 @@ const initialData = {
       direction: "慢针方向",
       amount: "游丝快慢针向慢侧微调0.4格",
       note: "初次调校，先保守处理",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ],
   retests: [
@@ -54,7 +96,8 @@ const initialData = {
       dailyRateSeconds: 31,
       amplitude: 248,
       qualified: false,
-      note: "仍偏快，振幅尚可"
+      note: "仍偏快，振幅尚可",
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ],
   handovers: [
@@ -64,7 +107,8 @@ const initialData = {
       handoverNote: "机芯已拆解清洗完毕，游丝有轻微变形需注意",
       nextStepSuggestion: "建议先调校游丝外桩，再进行走时精度测试",
       receiver: "王师傅",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ],
   retestTasks: [
@@ -78,7 +122,8 @@ const initialData = {
       completedAt: null,
       completedRetestId: null,
       note: "调校后一周复测",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ],
   suggestions: [],
@@ -100,7 +145,8 @@ const initialData = {
       },
       changedFields: null,
       summary: "创建钟表档案 CLK-1890-07",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: DEFAULT_SYSTEM_USER_ID
     }
   ]
 };
@@ -291,11 +337,18 @@ const CLOCK_KEY_FIELDS = [
 
 const routes = [
   "GET /health",
+  "GET /auth/me",
+  "POST /auth/login",
+  "GET /users",
+  "POST /users",
+  "PUT /users/:id",
+  "DELETE /users/:id",
   "GET /overview",
   "GET /workflow/statuses",
   "GET /clocks",
   "POST /clocks",
   "PUT /clocks/:id",
+  "PUT /clocks/:id/assign",
   "POST /clocks/import/preview",
   "POST /clocks/import",
   "GET /clocks/not-qualified",
@@ -416,15 +469,6 @@ function buildClockFromItem(item) {
     note: item.note || "",
     createdAt: new Date().toISOString()
   };
-}
-
-async function ensureDb() {
-  await mkdir(path.dirname(DB_FILE), { recursive: true });
-  try {
-    JSON.parse(await readFile(DB_FILE, "utf8"));
-  } catch {
-    await writeFile(DB_FILE, JSON.stringify(initialData, null, 2));
-  }
 }
 
 async function readDb() {
@@ -923,7 +967,8 @@ function createAuditLog(db, params) {
     clockId,
     beforeSnapshot,
     afterSnapshot,
-    changedFields
+    changedFields,
+    createdBy
   } = params;
 
   if (!db.auditLogs) db.auditLogs = [];
@@ -938,7 +983,8 @@ function createAuditLog(db, params) {
     afterSnapshot,
     changedFields,
     summary: buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSnapshot, changedFields),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    createdBy: createdBy || DEFAULT_SYSTEM_USER_ID
   };
   db.auditLogs.push(log);
   return log;
@@ -1177,13 +1223,19 @@ function clockSummary(db, clock) {
   const retest = latestRetest(db, clock.id);
   const adjustment = latestAdjustment(db, clock.id);
   const workflowStatus = deriveWorkflowStatus(db, clock.id);
+  const assignedTechnician = clock.assignedTechnicianId
+    ? db.users.find((u) => u.id === clock.assignedTechnicianId) || null
+    : null;
   return {
     ...clock,
     latestAdjustment: adjustment,
     latestRetest: retest,
     qualified: retest ? retest.qualified : false,
     workflowStatus,
-    workflowStatusLabel: WORKFLOW_STATUS_LABELS[workflowStatus]
+    workflowStatusLabel: WORKFLOW_STATUS_LABELS[workflowStatus],
+    assignedTechnician: assignedTechnician
+      ? { id: assignedTechnician.id, name: assignedTechnician.name, role: assignedTechnician.role }
+      : null
   };
 }
 
@@ -1210,7 +1262,8 @@ function classifyClockStatus(db, clock) {
   return "neverRetested";
 }
 
-function buildOverview(db) {
+function buildOverview(db, user) {
+  const accessibleClocks = user ? filterClocksByUser(db, user) : db.clocks;
   const statusBuckets = {
     pendingRetest: [],
     retestFailed: [],
@@ -1218,31 +1271,35 @@ function buildOverview(db) {
     neverRetested: []
   };
 
-  for (const clock of db.clocks) {
+  for (const clock of accessibleClocks) {
     const status = classifyClockStatus(db, clock);
     const summary = clockSummary(db, clock);
     statusBuckets[status].push(summary);
   }
 
   const overview = {
-    totalClocks: db.clocks.length,
+    totalClocks: accessibleClocks.length,
     pendingRetest: statusBuckets.pendingRetest.length,
     retestFailed: statusBuckets.retestFailed.length,
     qualified: statusBuckets.qualified.length,
     neverRetested: statusBuckets.neverRetested.length
   };
 
+  const accessibleClockIds = new Set(accessibleClocks.map((c) => c.id));
+  const accessibleAdjustments = db.adjustments.filter((a) => accessibleClockIds.has(a.clockId));
+  const accessibleRetests = db.retests.filter((r) => accessibleClockIds.has(r.clockId));
+
   let latestAdjustmentAt = null;
-  if (db.adjustments.length > 0) {
-    latestAdjustmentAt = db.adjustments
+  if (accessibleAdjustments.length > 0) {
+    latestAdjustmentAt = accessibleAdjustments
       .map((a) => new Date(a.createdAt))
       .sort((a, b) => b - a)[0]
       .toISOString();
   }
 
   let latestRetestAt = null;
-  if (db.retests.length > 0) {
-    latestRetestAt = db.retests
+  if (accessibleRetests.length > 0) {
+    latestRetestAt = accessibleRetests
       .map((r) => new Date(r.testedAt))
       .sort((a, b) => b - a)[0]
       .toISOString();
@@ -1259,32 +1316,330 @@ function buildOverview(db) {
   };
 }
 
+function migrateDbAddCreatedBy(db) {
+  let changed = false;
+  if (db.clocks) {
+    for (const clock of db.clocks) {
+      if (!clock.createdBy) {
+        clock.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+      if (clock.assignedTechnicianId === undefined) {
+        clock.assignedTechnicianId = null;
+        changed = true;
+      }
+    }
+  }
+  if (db.adjustments) {
+    for (const item of db.adjustments) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  if (db.retests) {
+    for (const item of db.retests) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  if (db.handovers) {
+    for (const item of db.handovers) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  if (db.retestTasks) {
+    for (const item of db.retestTasks) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  if (db.suggestions) {
+    for (const item of db.suggestions) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  if (db.auditLogs) {
+    for (const item of db.auditLogs) {
+      if (!item.createdBy) {
+        item.createdBy = DEFAULT_SYSTEM_USER_ID;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+async function ensureDb() {
+  await mkdir(path.dirname(DB_FILE), { recursive: true });
+  let dbData;
+  try {
+    dbData = JSON.parse(await readFile(DB_FILE, "utf8"));
+  } catch {
+    await writeFile(DB_FILE, JSON.stringify(initialData, null, 2));
+    return;
+  }
+  const needsMigration = migrateDbAddCreatedBy(dbData);
+  if (!dbData.users || dbData.users.length === 0) {
+    dbData.users = [...initialData.users];
+    if (dbData.clocks) {
+      for (const clock of dbData.clocks) {
+        if (!clock.assignedTechnicianId) {
+          clock.assignedTechnicianId = null;
+        }
+      }
+    }
+  }
+  if (needsMigration || !dbData.users) {
+    await writeFile(DB_FILE, JSON.stringify(dbData, null, 2));
+  }
+}
+
+function getCurrentUser(req, db) {
+  const userId = req.headers["x-user-id"];
+  if (userId) {
+    return db.users.find((u) => u.id === userId) || null;
+  }
+  return db.users.find((u) => u.id === DEFAULT_SYSTEM_USER_ID) || null;
+}
+
+function requireAuth(req, db) {
+  const user = getCurrentUser(req, db);
+  if (!user) {
+    const error = new Error("未授权，请通过 X-User-Id 头传递用户ID");
+    error.status = 401;
+    error.code = "UNAUTHORIZED";
+    throw error;
+  }
+  return user;
+}
+
+function requireAdmin(req, db) {
+  const user = requireAuth(req, db);
+  if (user.role !== USER_ROLES.ADMIN) {
+    const error = new Error("需要管理员权限");
+    error.status = 403;
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return user;
+}
+
+function canAccessClock(clock, user) {
+  if (!user) return false;
+  if (user.role === USER_ROLES.ADMIN) return true;
+  return clock.assignedTechnicianId === user.id;
+}
+
+function filterClocksByUser(db, user) {
+  if (!user) return [];
+  if (user.role === USER_ROLES.ADMIN) return db.clocks;
+  return db.clocks.filter((c) => c.assignedTechnicianId === user.id);
+}
+
+function findUser(db, userId) {
+  const user = db.users.find((u) => u.id === userId);
+  if (!user) {
+    const error = new Error("用户不存在");
+    error.status = 404;
+    throw error;
+  }
+  return user;
+}
+
+function userSummary(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role: user.role,
+    createdAt: user.createdAt
+  };
+}
+
+function enrichWithCreator(db, item) {
+  if (!item) return item;
+  const creator = db.users.find((u) => u.id === item.createdBy) || null;
+  return {
+    ...item,
+    creator: creator ? { id: creator.id, name: creator.name, role: creator.role } : null
+  };
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
   const db = await readDb();
+  const currentUser = getCurrentUser(req, db);
 
   if (req.method === "GET" && pathname === "/health") {
-    return send(res, 200, { ok: true, service: "clock-escapement-tuning-api", routes });
+    return send(res, 200, { ok: true, service: "clock-escapement-tuning-api", routes, authEnabled: true });
+  }
+
+  if (req.method === "GET" && pathname === "/auth/me") {
+    const user = currentUser;
+    if (!user) {
+      return send(res, 200, { data: null, roles: USER_ROLES });
+    }
+    return send(res, 200, { data: userSummary(user), roles: USER_ROLES });
+  }
+
+  if (req.method === "POST" && pathname === "/auth/login") {
+    const body = await parseBody(req);
+    required(body, ["username"]);
+    const user = db.users.find((u) => u.username === body.username);
+    if (!user) {
+      const error = new Error("用户不存在");
+      error.status = 401;
+      error.code = "INVALID_USER";
+      throw error;
+    }
+    return send(res, 200, {
+      data: {
+        user: userSummary(user),
+        token: user.id
+      },
+      message: "本地开发模式：请将 token 放入 X-User-Id 请求头中使用"
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/users") {
+    requireAuth(req, db);
+    const role = url.searchParams.get("role");
+    let data = db.users.map((u) => userSummary(u));
+    if (role) {
+      data = data.filter((u) => u.role === role);
+    }
+    const stats = {
+      total: db.users.length,
+      admin: db.users.filter((u) => u.role === USER_ROLES.ADMIN).length,
+      technician: db.users.filter((u) => u.role === USER_ROLES.TECHNICIAN).length
+    };
+    return send(res, 200, { data, stats, roles: USER_ROLES });
+  }
+
+  if (req.method === "POST" && pathname === "/users") {
+    requireAdmin(req, db);
+    const body = await parseBody(req);
+    required(body, ["username", "name", "role"]);
+    const validRoles = Object.values(USER_ROLES);
+    if (!validRoles.includes(body.role)) {
+      const error = new Error(`角色必须是 ${validRoles.join("/")}`);
+      error.status = 400;
+      throw error;
+    }
+    const existing = db.users.find((u) => u.username === body.username);
+    if (existing) {
+      const error = new Error("用户名已存在");
+      error.status = 400;
+      error.code = "USERNAME_EXISTS";
+      throw error;
+    }
+    const user = {
+      id: makeId("user"),
+      username: body.username,
+      name: body.name,
+      role: body.role,
+      createdAt: new Date().toISOString()
+    };
+    db.users.push(user);
+    await writeDb(db);
+    return send(res, 201, { data: userSummary(user) });
+  }
+
+  const userUpdateMatch = pathname.match(/^\/users\/([^/]+)$/);
+  if (userUpdateMatch && req.method === "PUT") {
+    requireAdmin(req, db);
+    const user = findUser(db, userUpdateMatch[1]);
+    const body = await parseBody(req);
+    if (body.name !== undefined) user.name = body.name;
+    if (body.role !== undefined) {
+      const validRoles = Object.values(USER_ROLES);
+      if (!validRoles.includes(body.role)) {
+        const error = new Error(`角色必须是 ${validRoles.join("/")}`);
+        error.status = 400;
+        throw error;
+      }
+      user.role = body.role;
+    }
+    user.updatedAt = new Date().toISOString();
+    await writeDb(db);
+    return send(res, 200, { data: userSummary(user) });
+  }
+
+  if (userUpdateMatch && req.method === "DELETE") {
+    requireAdmin(req, db);
+    const userId = userUpdateMatch[1];
+    const userIndex = db.users.findIndex((u) => u.id === userId);
+    if (userIndex === -1) {
+      const error = new Error("用户不存在");
+      error.status = 404;
+      throw error;
+    }
+    if (userId === DEFAULT_SYSTEM_USER_ID || userId === DEFAULT_ADMIN_USER_ID) {
+      const error = new Error("系统内置用户不可删除");
+      error.status = 400;
+      error.code = "CANNOT_DELETE_SYSTEM_USER";
+      throw error;
+    }
+    const deletedUser = db.users.splice(userIndex, 1)[0];
+    for (const clock of db.clocks) {
+      if (clock.assignedTechnicianId === userId) {
+        clock.assignedTechnicianId = null;
+      }
+    }
+    await writeDb(db);
+    return send(res, 200, { data: userSummary(deletedUser) });
   }
 
   if (req.method === "GET" && pathname === "/overview") {
-    return send(res, 200, { data: buildOverview(db) });
+    requireAuth(req, db);
+    return send(res, 200, { data: buildOverview(db, currentUser) });
   }
 
   if (req.method === "GET" && pathname === "/clocks") {
+    requireAuth(req, db);
     const qualified = url.searchParams.get("qualified");
-    let data = db.clocks.map((clock) => clockSummary(db, clock));
+    const assignedTechnicianId = url.searchParams.get("assignedTechnicianId");
+    let accessibleClocks = filterClocksByUser(db, currentUser);
+    let data = accessibleClocks.map((clock) => clockSummary(db, clock));
     if (qualified !== null) {
       const expected = qualified === "true";
       data = data.filter((clock) => clock.qualified === expected);
     }
-    return send(res, 200, { data });
+    if (assignedTechnicianId && currentUser.role === USER_ROLES.ADMIN) {
+      data = data.filter((clock) => clock.assignedTechnicianId === assignedTechnicianId);
+    }
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "POST" && pathname === "/clocks") {
+    requireAuth(req, db);
     const body = await parseBody(req);
     required(body, ["code", "escapementType", "balanceFrequency"]);
+    let assignedTechnicianId = body.assignedTechnicianId || null;
+    if (assignedTechnicianId && currentUser.role !== USER_ROLES.ADMIN) {
+      assignedTechnicianId = currentUser.id;
+    }
+    if (assignedTechnicianId) {
+      const tech = db.users.find((u) => u.id === assignedTechnicianId);
+      if (!tech) {
+        const error = new Error("指定的负责人不存在");
+        error.status = 400;
+        throw error;
+      }
+    }
     const clock = {
       id: makeId("clock"),
       code: body.code,
@@ -1292,11 +1647,15 @@ async function handle(req, res) {
       balanceFrequency: body.balanceFrequency,
       targetDailyRateSeconds: Number(body.targetDailyRateSeconds ?? 30),
       note: body.note || "",
-      createdAt: new Date().toISOString()
+      assignedTechnicianId,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id
     };
     db.clocks.push(clock);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
       resourceId: clock.id,
       clockId: clock.id,
@@ -1310,7 +1669,14 @@ async function handle(req, res) {
 
   const clockUpdateMatch = pathname.match(/^\/clocks\/([^/]+)$/);
   if (clockUpdateMatch && req.method === "PUT") {
+    requireAuth(req, db);
     const clock = findClock(db, clockUpdateMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
 
     const beforeKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
@@ -1320,6 +1686,17 @@ async function handle(req, res) {
     if (body.balanceFrequency !== undefined) clock.balanceFrequency = body.balanceFrequency;
     if (body.targetDailyRateSeconds !== undefined) clock.targetDailyRateSeconds = Number(body.targetDailyRateSeconds);
     if (body.note !== undefined) clock.note = body.note || "";
+    if (body.assignedTechnicianId !== undefined && currentUser.role === USER_ROLES.ADMIN) {
+      if (body.assignedTechnicianId) {
+        const tech = db.users.find((u) => u.id === body.assignedTechnicianId);
+        if (!tech) {
+          const error = new Error("指定的负责人不存在");
+          error.status = 400;
+          throw error;
+        }
+      }
+      clock.assignedTechnicianId = body.assignedTechnicianId || null;
+    }
     clock.updatedAt = new Date().toISOString();
 
     const afterKeySnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
@@ -1327,6 +1704,8 @@ async function handle(req, res) {
 
     if (changedFields) {
       createAuditLog(db, {
+        createdBy: currentUser.id,
+      createdBy: currentUser.id,
         operationType: AUDIT_OPERATION_TYPES.CLOCK_UPDATE,
         resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
         resourceId: clock.id,
@@ -1344,7 +1723,36 @@ async function handle(req, res) {
     });
   }
 
+  const clockAssignMatch = pathname.match(/^\/clocks\/([^/]+)\/assign$/);
+  if (clockAssignMatch && req.method === "PUT") {
+    requireAdmin(req, db);
+    const clock = findClock(db, clockAssignMatch[1]);
+    const body = await parseBody(req);
+    const { technicianId } = body;
+    if (technicianId) {
+      const tech = db.users.find((u) => u.id === technicianId);
+      if (!tech) {
+        const error = new Error("指定的技师不存在");
+        error.status = 400;
+        throw error;
+      }
+      if (tech.role !== USER_ROLES.TECHNICIAN && tech.role !== USER_ROLES.ADMIN) {
+        const error = new Error("只能分配给技师或管理员");
+        error.status = 400;
+        throw error;
+      }
+    }
+    clock.assignedTechnicianId = technicianId || null;
+    clock.updatedAt = new Date().toISOString();
+    await writeDb(db);
+    return send(res, 200, {
+      data: clockSummary(db, clock),
+      message: technicianId ? `已分配给 ${db.users.find(u => u.id === technicianId).name}` : "已取消分配"
+    });
+  }
+
   if (req.method === "POST" && pathname === "/clocks/import/preview") {
+    requireAdmin(req, db);
     const body = await parseBody(req);
     if (!Array.isArray(body.clocks)) {
       const error = new Error("请求体必须包含 clocks 数组");
@@ -1366,6 +1774,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/clocks/import") {
+    requireAdmin(req, db);
     const body = await parseBody(req);
     if (!Array.isArray(body.clocks)) {
       const error = new Error("请求体必须包含 clocks 数组");
@@ -1374,10 +1783,23 @@ async function handle(req, res) {
     }
     const { importable, duplicates, missingFields } = classifyImportItems(db, body.clocks);
     const created = [];
+    const assignedTechnicianId = body.assignedTechnicianId || null;
+    if (assignedTechnicianId) {
+      const tech = db.users.find((u) => u.id === assignedTechnicianId);
+      if (!tech) {
+        const error = new Error("指定的负责人不存在");
+        error.status = 400;
+        throw error;
+      }
+    }
     for (const { item } of importable) {
       const clock = buildClockFromItem(item);
+      clock.assignedTechnicianId = assignedTechnicianId;
+      clock.createdBy = currentUser.id;
       db.clocks.push(clock);
       createAuditLog(db, {
+        createdBy: currentUser.id,
+      createdBy: currentUser.id,
         operationType: AUDIT_OPERATION_TYPES.CLOCK_CREATE,
         resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
         resourceId: clock.id,
@@ -1403,19 +1825,23 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/clocks/not-qualified") {
-    const data = db.clocks.map((clock) => clockSummary(db, clock)).filter((clock) => !clock.qualified);
-    return send(res, 200, { data });
+    requireAuth(req, db);
+    const accessibleClocks = filterClocksByUser(db, currentUser);
+    const data = accessibleClocks.map((clock) => clockSummary(db, clock)).filter((clock) => !clock.qualified);
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/clocks/health-scores") {
+    requireAuth(req, db);
     const conclusion = url.searchParams.get("conclusion");
-    const data = db.clocks.map((clock) => calculateHealthScore(db, clock));
+    const accessibleClocks = filterClocksByUser(db, currentUser);
+    const data = accessibleClocks.map((clock) => calculateHealthScore(db, clock));
     let filtered = data;
     if (conclusion) {
       filtered = data.filter((item) => item.conclusion === conclusion);
     }
     const summary = {
-      total: db.clocks.length,
+      total: accessibleClocks.length,
       stable: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.stable).length,
       observe: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.observe).length,
       rework: filtered.filter((item) => item.conclusion === HEALTH_SCORE_RULES.conclusions.rework).length,
@@ -1431,17 +1857,31 @@ async function handle(req, res) {
 
   const historyMatch = pathname.match(/^\/clocks\/([^/]+)\/history$/);
   if (historyMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, historyMatch[1]);
-    const adjustments = db.adjustments.filter((item) => item.clockId === clock.id);
-    const retests = db.retests.filter((item) => item.clockId === clock.id);
-    const handovers = listHandovers(db, clock.id);
-    const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id);
-    return send(res, 200, { data: { clock, adjustments, retests, handovers, retestTasks, latestRetest: latestRetest(db, clock.id) } });
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const adjustments = db.adjustments.filter((item) => item.clockId === clock.id).map((a) => enrichWithCreator(db, a));
+    const retests = db.retests.filter((item) => item.clockId === clock.id).map((r) => enrichWithCreator(db, r));
+    const handovers = listHandovers(db, clock.id).map((h) => enrichWithCreator(db, h));
+    const retestTasks = (db.retestTasks || []).filter((item) => item.clockId === clock.id).map((t) => enrichWithCreator(db, t));
+    return send(res, 200, { data: { clock: clockSummary(db, clock), adjustments, retests, handovers, retestTasks, latestRetest: enrichWithCreator(db, latestRetest(db, clock.id)) } });
   }
 
   const auditLogsByClockMatch = pathname.match(/^\/clocks\/([^/]+)\/audit-logs$/);
   if (auditLogsByClockMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, auditLogsByClockMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const logs = listAuditLogsByClock(db, clock.id);
 
     const operationTypeLabels = {
@@ -1452,7 +1892,7 @@ async function handle(req, res) {
     };
 
     const timeline = logs.map((log) => ({
-      ...log,
+      ...enrichWithCreator(db, log),
       operationLabel: operationTypeLabels[log.operationType] || log.operationType
     }));
 
@@ -1477,10 +1917,15 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/audit-logs") {
+    requireAuth(req, db);
     const operationType = url.searchParams.get("operationType");
     const resourceType = url.searchParams.get("resourceType");
     const clockId = url.searchParams.get("clockId");
     let data = listAllAuditLogs(db);
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((log) => accessibleClockIds.has(log.clockId));
+    }
     if (operationType) {
       data = data.filter((log) => log.operationType === operationType);
     }
@@ -1490,6 +1935,7 @@ async function handle(req, res) {
     if (clockId) {
       data = data.filter((log) => log.clockId === clockId);
     }
+    data = data.map((log) => enrichWithCreator(db, log));
     return send(res, 200, {
       data,
       total: data.length,
@@ -1519,13 +1965,27 @@ async function handle(req, res) {
 
   const workflowStatusMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow-status$/);
   if (workflowStatusMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, workflowStatusMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     return send(res, 200, { data: buildWorkflowStatusInfo(db, clock.id) });
   }
 
   const workflowInitialAdjustMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/initial-adjust$/);
   if (workflowInitialAdjustMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, workflowInitialAdjustMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.INITIAL_ADJUST);
     const body = await parseBody(req);
@@ -1538,11 +1998,14 @@ async function handle(req, res) {
       amount: body.amount,
       note: body.note || "",
       createdAt: new Date().toISOString(),
-      workflowOperation: WORKFLOW_OPERATIONS.INITIAL_ADJUST
+      workflowOperation: WORKFLOW_OPERATIONS.INITIAL_ADJUST,
+      createdBy: currentUser.id
     };
     db.adjustments.push(adjustment);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
       resourceId: adjustment.id,
       clockId: clock.id,
@@ -1558,14 +2021,21 @@ async function handle(req, res) {
     });
     await writeDb(db);
     return send(res, 201, {
-      data: adjustment,
+      data: enrichWithCreator(db, adjustment),
       workflowStatus: buildWorkflowStatusInfo(db, clock.id)
     });
   }
 
   const workflowSubmitRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/submit-retest$/);
   if (workflowSubmitRetestMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, workflowSubmitRetestMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.SUBMIT_RETEST);
     const body = await parseBody(req);
@@ -1580,11 +2050,14 @@ async function handle(req, res) {
       createdAt: new Date().toISOString(),
       workflowOperation: currentStatus === WORKFLOW_STATUSES.RETEST_FAILED
         ? WORKFLOW_OPERATIONS.REWORK
-        : WORKFLOW_OPERATIONS.SUBMIT_RETEST
+        : WORKFLOW_OPERATIONS.SUBMIT_RETEST,
+      createdBy: currentUser.id
     };
     db.adjustments.push(adjustment);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
       resourceId: adjustment.id,
       clockId: clock.id,
@@ -1609,21 +2082,29 @@ async function handle(req, res) {
         completedAt: null,
         completedRetestId: null,
         note: body.retestTaskNote || "",
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id
       };
       if (!db.retestTasks) db.retestTasks = [];
       db.retestTasks.push(task);
     }
     await writeDb(db);
     return send(res, 201, {
-      data: adjustment,
+      data: enrichWithCreator(db, adjustment),
       workflowStatus: buildWorkflowStatusInfo(db, clock.id)
     });
   }
 
   const workflowCompleteRetestMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/complete-retest$/);
   if (workflowCompleteRetestMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, workflowCompleteRetestMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     if (currentStatus !== WORKFLOW_STATUSES.PENDING_RETEST) {
       const error = new Error(
@@ -1663,11 +2144,14 @@ async function handle(req, res) {
       amplitude: Number(body.amplitude),
       qualified,
       note: body.note || "",
-      workflowOperation: WORKFLOW_OPERATIONS.COMPLETE_RETEST
+      workflowOperation: WORKFLOW_OPERATIONS.COMPLETE_RETEST,
+      createdBy: currentUser.id
     };
     db.retests.push(retest);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.RETEST,
       resourceId: retest.id,
       clockId: clock.id,
@@ -1710,7 +2194,7 @@ async function handle(req, res) {
     }
     await writeDb(db);
     return send(res, 201, {
-      data: retest,
+      data: enrichWithCreator(db, retest),
       clock: clockSummary(db, clock),
       workflowStatus: buildWorkflowStatusInfo(db, clock.id)
     });
@@ -1718,7 +2202,14 @@ async function handle(req, res) {
 
   const workflowReworkMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/rework$/);
   if (workflowReworkMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, workflowReworkMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.REWORK);
     const body = await parseBody(req);
@@ -1731,11 +2222,14 @@ async function handle(req, res) {
       amount: body.amount,
       note: body.note || "",
       createdAt: new Date().toISOString(),
-      workflowOperation: WORKFLOW_OPERATIONS.REWORK
+      workflowOperation: WORKFLOW_OPERATIONS.REWORK,
+      createdBy: currentUser.id
     };
     db.adjustments.push(adjustment);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
       resourceId: adjustment.id,
       clockId: clock.id,
@@ -1760,20 +2254,22 @@ async function handle(req, res) {
         completedAt: null,
         completedRetestId: null,
         note: body.retestTaskNote || "",
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id
       };
       if (!db.retestTasks) db.retestTasks = [];
       db.retestTasks.push(task);
     }
     await writeDb(db);
     return send(res, 201, {
-      data: adjustment,
+      data: enrichWithCreator(db, adjustment),
       workflowStatus: buildWorkflowStatusInfo(db, clock.id)
     });
   }
 
   const workflowArchiveMatch = pathname.match(/^\/clocks\/([^/]+)\/workflow\/archive$/);
   if (workflowArchiveMatch && req.method === "POST") {
+    requireAdmin(req, db);
     const clock = findClock(db, workflowArchiveMatch[1]);
     const currentStatus = deriveWorkflowStatus(db, clock.id);
     validateWorkflowTransition(currentStatus, WORKFLOW_OPERATIONS.ARCHIVE);
@@ -1781,6 +2277,7 @@ async function handle(req, res) {
     clock.workflowArchived = true;
     clock.workflowArchivedAt = new Date().toISOString();
     clock.workflowArchiveNote = body.note || "";
+    clock.updatedAt = new Date().toISOString();
     await writeDb(db);
     return send(res, 200, {
       data: {
@@ -1795,13 +2292,27 @@ async function handle(req, res) {
 
   const healthScoreMatch = pathname.match(/^\/clocks\/([^/]+)\/health-score$/);
   if (healthScoreMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, healthScoreMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     return send(res, 200, { data: calculateHealthScore(db, clock) });
   }
 
   const adjustmentMatch = pathname.match(/^\/clocks\/([^/]+)\/adjustments$/);
   if (adjustmentMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, adjustmentMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
     required(body, ["currentDailyRateSeconds", "direction", "amount"]);
     const adjustment = {
@@ -1811,11 +2322,14 @@ async function handle(req, res) {
       direction: body.direction,
       amount: body.amount,
       note: body.note || "",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id
     };
     db.adjustments.push(adjustment);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.ADJUSTMENT,
       resourceId: adjustment.id,
       clockId: clock.id,
@@ -1830,12 +2344,19 @@ async function handle(req, res) {
       changedFields: null
     });
     await writeDb(db);
-    return send(res, 201, { data: adjustment });
+    return send(res, 201, { data: enrichWithCreator(db, adjustment) });
   }
 
   const retestMatch = pathname.match(/^\/clocks\/([^/]+)\/retests$/);
   if (retestMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, retestMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
     required(body, ["dailyRateSeconds", "amplitude"]);
 
@@ -1869,11 +2390,14 @@ async function handle(req, res) {
       dailyRateSeconds: Number(body.dailyRateSeconds),
       amplitude: Number(body.amplitude),
       qualified,
-      note: body.note || ""
+      note: body.note || "",
+      createdBy: currentUser.id
     };
     db.retests.push(retest);
     createAuditLog(db, {
-      operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
+      createdBy: currentUser.id,
+      createdBy: currentUser.id,
+        operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
       resourceType: AUDIT_RESOURCE_TYPES.RETEST,
       resourceId: retest.id,
       clockId: clock.id,
@@ -1915,24 +2439,46 @@ async function handle(req, res) {
       }
     }
     await writeDb(db);
-    return send(res, 201, { data: retest, clock: clockSummary(db, clock) });
+    return send(res, 201, { data: enrichWithCreator(db, retest), clock: clockSummary(db, clock) });
   }
 
   const latestMatch = pathname.match(/^\/clocks\/([^/]+)\/latest-retest$/);
   if (latestMatch && req.method === "GET") {
-    findClock(db, latestMatch[1]);
-    return send(res, 200, { data: latestRetest(db, latestMatch[1]) });
+    requireAuth(req, db);
+    const clock = findClock(db, latestMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    return send(res, 200, { data: enrichWithCreator(db, latestRetest(db, latestMatch[1])) });
   }
 
   const handoverListMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverListMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, handoverListMatch[1]);
-    return send(res, 200, { data: listHandovers(db, clock.id) });
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const data = listHandovers(db, clock.id).map((h) => enrichWithCreator(db, h));
+    return send(res, 200, { data, total: data.length });
   }
 
   const handoverCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/handovers$/);
   if (handoverCreateMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, handoverCreateMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
     required(body, ["handoverNote", "receiver"]);
     const handover = {
@@ -1941,30 +2487,45 @@ async function handle(req, res) {
       handoverNote: body.handoverNote,
       nextStepSuggestion: body.nextStepSuggestion || "",
       receiver: body.receiver,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id
     };
     db.handovers.push(handover);
     await writeDb(db);
-    return send(res, 201, { data: handover });
+    return send(res, 201, { data: enrichWithCreator(db, handover) });
   }
 
   if (req.method === "GET" && pathname === "/adjustments") {
+    requireAuth(req, db);
     const clockId = url.searchParams.get("clockId");
-    return send(res, 200, { data: db.adjustments.filter((item) => !clockId || item.clockId === clockId) });
+    let data = db.adjustments.filter((item) => !clockId || item.clockId === clockId);
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+    }
+    data = data.map((item) => enrichWithCreator(db, item));
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/retests") {
+    requireAuth(req, db);
     const clockId = url.searchParams.get("clockId");
     const qualified = url.searchParams.get("qualified");
-    const data = db.retests.filter((item) => {
+    let data = db.retests.filter((item) => {
       const matchClock = !clockId || item.clockId === clockId;
       const matchQualified = qualified === null || item.qualified === (qualified === "true");
       return matchClock && matchQualified;
     });
-    return send(res, 200, { data });
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+    }
+    data = data.map((item) => enrichWithCreator(db, item));
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/retest-tasks") {
+    requireAuth(req, db);
     const status = url.searchParams.get("status");
     const priority = url.searchParams.get("priority");
     const overdue = url.searchParams.get("overdue");
@@ -1982,6 +2543,10 @@ async function handle(req, res) {
       }
       return matchStatus && matchPriority && matchClock && matchOverdue;
     });
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+    }
     data = data.sort((a, b) => {
       const priorityOrder = { high: 0, medium: 1, low: 2 };
       const pa = priorityOrder[a.priority] ?? 1;
@@ -1989,18 +2554,25 @@ async function handle(req, res) {
       if (pa !== pb) return pa - pb;
       return new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt);
     });
-    data = data.map((task) => ({
+    data = data.map((task) => enrichWithCreator(db, {
       ...task,
       clock: db.clocks.find((c) => c.id === task.clockId) || null,
       adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
       overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
     }));
-    return send(res, 200, { data });
+    return send(res, 200, { data, total: data.length });
   }
 
   const retestTaskCreateMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
   if (retestTaskCreateMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, retestTaskCreateMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
     required(body, ["plannedRetestAt", "priority"]);
     const validPriorities = ["high", "medium", "low"];
@@ -2025,51 +2597,80 @@ async function handle(req, res) {
       completedAt: null,
       completedRetestId: null,
       note: body.note || "",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id
     };
     if (!db.retestTasks) db.retestTasks = [];
     db.retestTasks.push(task);
     await writeDb(db);
     return send(res, 201, {
-      data: {
+      data: enrichWithCreator(db, {
         ...task,
-        clock,
+        clock: clockSummary(db, clock),
         adjustment: db.adjustments.find((a) => a.id === adjustmentId) || null,
         overdue: false
-      }
+      })
     });
   }
 
   const retestTaskListMatch = pathname.match(/^\/clocks\/([^/]+)\/retest-tasks$/);
   if (retestTaskListMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, retestTaskListMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const now = new Date();
     const data = (db.retestTasks || [])
       .filter((item) => item.clockId === clock.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .map((task) => ({
+      .map((task) => enrichWithCreator(db, {
         ...task,
         adjustment: db.adjustments.find((a) => a.id === task.adjustmentId) || null,
         overdue: task.status === "pending" && new Date(task.plannedRetestAt) < now
       }));
-    return send(res, 200, { data });
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/handovers") {
+    requireAuth(req, db);
     const clockId = url.searchParams.get("clockId");
-    return send(res, 200, { data: db.handovers.filter((item) => !clockId || item.clockId === clockId) });
+    let data = db.handovers.filter((item) => !clockId || item.clockId === clockId);
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+    }
+    data = data.map((item) => enrichWithCreator(db, item));
+    return send(res, 200, { data, total: data.length });
   }
 
   const generateSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions\/generate$/);
   if (generateSuggestionMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, generateSuggestionMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const suggestion = generateAdjustmentSuggestion(db, clock);
     return send(res, 200, { data: suggestion });
   }
 
   const saveSuggestionMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
   if (saveSuggestionMatch && req.method === "POST") {
+    requireAuth(req, db);
     const clock = findClock(db, saveSuggestionMatch[1]);
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限操作该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const body = await parseBody(req);
     const suggestion = generateAdjustmentSuggestion(db, clock);
     const savedSuggestion = {
@@ -2086,56 +2687,79 @@ async function handle(req, res) {
       referenceRetestId: suggestion.referenceRetestId,
       referenceAdjustmentId: suggestion.referenceAdjustmentId,
       note: body.note || "",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.id
     };
     db.suggestions.push(savedSuggestion);
     await writeDb(db);
-    return send(res, 201, { data: savedSuggestion });
+    return send(res, 201, { data: enrichWithCreator(db, savedSuggestion) });
   }
 
   const listSuggestionsMatch = pathname.match(/^\/clocks\/([^/]+)\/suggestions$/);
   if (listSuggestionsMatch && req.method === "GET") {
+    requireAuth(req, db);
     const clock = findClock(db, listSuggestionsMatch[1]);
-    const data = listSuggestions(db, clock.id).map((s) => ({
+    if (!canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该钟表档案");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
+    const data = listSuggestions(db, clock.id).map((s) => enrichWithCreator(db, {
       ...s,
       referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
       referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
     }));
-    return send(res, 200, { data });
+    return send(res, 200, { data, total: data.length });
   }
 
   if (req.method === "GET" && pathname === "/suggestions") {
+    requireAuth(req, db);
     const clockId = url.searchParams.get("clockId");
-    const data = listSuggestions(db, clockId).map((s) => ({
+    let data = listSuggestions(db, clockId);
+    if (currentUser.role !== USER_ROLES.ADMIN) {
+      const accessibleClockIds = new Set(filterClocksByUser(db, currentUser).map((c) => c.id));
+      data = data.filter((item) => accessibleClockIds.has(item.clockId));
+    }
+    data = data.map((s) => enrichWithCreator(db, {
       ...s,
       referenceRetest: db.retests.find((r) => r.id === s.referenceRetestId) || null,
       referenceAdjustment: db.adjustments.find((a) => a.id === s.referenceAdjustmentId) || null
     }));
-    return send(res, 200, { data });
+    return send(res, 200, { data, total: data.length });
   }
 
   const suggestionDetailMatch = pathname.match(/^\/suggestions\/([^/]+)$/);
   if (suggestionDetailMatch && req.method === "GET") {
+    requireAuth(req, db);
     const suggestion = findSuggestion(db, suggestionDetailMatch[1]);
     const clock = db.clocks.find((c) => c.id === suggestion.clockId) || null;
+    if (clock && !canAccessClock(clock, currentUser)) {
+      const error = new Error("无权限访问该建议记录");
+      error.status = 403;
+      error.code = "FORBIDDEN";
+      throw error;
+    }
     const referenceRetest = db.retests.find((r) => r.id === suggestion.referenceRetestId) || null;
     const referenceAdjustment = db.adjustments.find((a) => a.id === suggestion.referenceAdjustmentId) || null;
     return send(res, 200, {
-      data: {
+      data: enrichWithCreator(db, {
         ...suggestion,
         clock,
         referenceRetest,
         referenceAdjustment
-      }
+      })
     });
   }
 
   if (req.method === "POST" && pathname === "/backups") {
+    requireAdmin(req, db);
     const backup = await createBackup();
     return send(res, 201, { data: backup });
   }
 
   if (req.method === "GET" && pathname === "/backups") {
+    requireAdmin(req, db);
     const backups = await listBackups();
     return send(res, 200, {
       data: backups,
@@ -2146,12 +2770,14 @@ async function handle(req, res) {
 
   const validateBackupMatch = pathname.match(/^\/backups\/([^/]+)\/validate$/);
   if (validateBackupMatch && req.method === "GET") {
+    requireAdmin(req, db);
     const result = await validateBackup(validateBackupMatch[1]);
     return send(res, 200, { data: result });
   }
 
   const restoreBackupMatch = pathname.match(/^\/backups\/([^/]+)\/restore$/);
   if (restoreBackupMatch && req.method === "POST") {
+    requireAdmin(req, db);
     const result = await restoreBackup(restoreBackupMatch[1]);
     return send(res, 200, { data: result });
   }
