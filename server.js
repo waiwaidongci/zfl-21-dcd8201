@@ -3993,6 +3993,7 @@ async function handle(req, res) {
     }
     const body = await parseBody(req);
     required(body, ["currentDailyRateSeconds", "direction", "amount"]);
+    const workflowStatusBeforeAdjustment = deriveWorkflowStatus(db, clock.id);
     const adjustment = {
       id: makeId("adjustment"),
       clockId: clock.id,
@@ -4022,13 +4023,12 @@ async function handle(req, res) {
       changedFields: null
     });
     try {
-      const curStatus = deriveWorkflowStatus(db, clock.id);
       let evtType = WORKFLOW_EVENT_TYPES.SUBMITTED_RETEST;
-      if (curStatus === WORKFLOW_STATUSES.CREATED) {
+      if (workflowStatusBeforeAdjustment === WORKFLOW_STATUSES.CREATED) {
         evtType = WORKFLOW_EVENT_TYPES.INITIAL_ADJUSTED;
-      } else if (curStatus === WORKFLOW_STATUSES.RETEST_FAILED) {
+      } else if (workflowStatusBeforeAdjustment === WORKFLOW_STATUSES.RETEST_FAILED) {
         evtType = WORKFLOW_EVENT_TYPES.REWORKED;
-      } else if (curStatus === WORKFLOW_STATUSES.ARCHIVED) {
+      } else if (workflowStatusBeforeAdjustment === WORKFLOW_STATUSES.ARCHIVED) {
         evtType = WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK;
       }
       recordWorkflowEvent(db, {
@@ -4038,7 +4038,7 @@ async function handle(req, res) {
         createdBy: currentUser.id,
         note: adjustment.note,
         relatedAdjustmentId: adjustment.id,
-        meta: { source: "generic_adjustment", statusBefore: curStatus }
+        meta: { source: "generic_adjustment", statusBefore: workflowStatusBeforeAdjustment }
       });
     } catch (_) {}
     await writeDb(db);
