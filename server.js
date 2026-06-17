@@ -1429,6 +1429,36 @@ function buildOverview(db, user) {
   const accessibleAdjustments = db.adjustments.filter((a) => accessibleClockIds.has(a.clockId));
   const accessibleRetests = db.retests.filter((r) => accessibleClockIds.has(r.clockId));
 
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 86400000);
+  const accessibleRetestTasks = (db.retestTasks || []).filter((t) => accessibleClockIds.has(t.clockId));
+  const pendingTasks = accessibleRetestTasks.filter((t) => t.status === "pending");
+
+  let todayPendingRetest = 0;
+  let overdueRetest = 0;
+  let highPriorityPendingRetest = 0;
+
+  for (const task of pendingTasks) {
+    const planned = new Date(task.plannedRetestAt);
+    if (task.priority === "high") highPriorityPendingRetest++;
+    if (planned < todayStart) {
+      overdueRetest++;
+    } else if (planned >= todayStart && planned < todayEnd) {
+      todayPendingRetest++;
+    }
+  }
+
+  overview.todayPendingRetest = todayPendingRetest;
+  overview.overdueRetest = overdueRetest;
+  overview.highPriorityPendingRetest = highPriorityPendingRetest;
+
+  const retestTaskPreviews = pendingTasks
+    .slice()
+    .sort((a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt))
+    .slice(0, 5)
+    .map((task) => enrichRetestTask(db, task, now));
+
   let latestAdjustmentAt = null;
   if (accessibleAdjustments.length > 0) {
     latestAdjustmentAt = accessibleAdjustments
@@ -1452,6 +1482,7 @@ function buildOverview(db, user) {
       latestRetestAt
     },
     breakdown: statusBuckets,
+    retestTaskPreviews,
     generatedAt: new Date().toISOString()
   };
 }
