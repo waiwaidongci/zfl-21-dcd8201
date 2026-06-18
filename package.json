@@ -1,0 +1,25 @@
+{
+  "name": "clock-escapement-tuning-api",
+  "version": "1.0.0",
+  "description": "机械钟表擒纵调校 API - 零依赖 Node 单文件服务",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "PORT=3021 node server.js",
+    "test": "node --test test/index.js",
+    "test:verbose": "VERBOSE_TESTS=1 node --test test/index.js",
+    "test:watch": "node --watch --test test/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "clock",
+    "escapement",
+    "tuning",
+    "api",
+    "zero-dependency"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}

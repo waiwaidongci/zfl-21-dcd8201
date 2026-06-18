@@ -1,150 +1,26 @@
-const { test, before, after, beforeEach, describe } = require("node:test");
+const { test, before, after, describe } = require("node:test");
 const assert = require("node:assert/strict");
-const http = require("node:http");
-const { spawn } = require("node:child_process");
-const path = require("node:path");
-const fs = require("node:fs/promises");
-const os = require("node:os");
-const crypto = require("node:crypto");
-
-const TEST_PORT = 13021;
-const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
-const SERVER_PATH = path.join(__dirname, "..", "server.js");
-
-let testDataDir;
-let serverProcess;
-
-function request(method, pathname, options = {}) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(pathname, BASE_URL);
-    const reqOptions = {
-      method,
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname + url.search,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers
-      }
-    };
-
-    const req = http.request(reqOptions, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        body += chunk;
-      });
-      res.on("end", () => {
-        let parsed;
-        try {
-          parsed = body ? JSON.parse(body) : {};
-        } catch (e) {
-          reject(new Error(`Invalid JSON response: ${body}`));
-          return;
-        }
-        resolve({ status: res.statusCode, body: parsed, headers: res.headers });
-      });
-    });
-
-    req.on("error", reject);
-
-    if (options.body !== undefined) {
-      req.write(JSON.stringify(options.body));
-    }
-    req.end();
-  });
-}
-
-async function login(username) {
-  const res = await request("POST", "/auth/login", {
-    body: { username }
-  });
-  assert.equal(res.status, 200, `Login failed for ${username}: ${JSON.stringify(res.body)}`);
-  return res.body.data.token;
-}
-
-async function waitForServer() {
-  const startTime = Date.now();
-  const timeout = 10000;
-  while (Date.now() - startTime < timeout) {
-    try {
-      const res = await request("GET", "/health");
-      if (res.status === 200 && res.body.ok) {
-        return;
-      }
-    } catch (e) {
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error("Server failed to start within timeout");
-}
-
-function createTempDir() {
-  const dir = path.join(os.tmpdir(), `backup-test-${crypto.randomBytes(8).toString("hex")}`);
-  return dir;
-}
-
-async function startServer(dataDir) {
-  const env = {
-    ...process.env,
-    PORT: TEST_PORT.toString(),
-    DATA_DIR: dataDir,
-    DB_FILE: path.join(dataDir, "db.json"),
-    BACKUP_DIR: path.join(dataDir, "backups"),
-    CONFIRMATION_TOKEN_SECRET: "test_secret_key_for_backup_token"
-  };
-
-  serverProcess = spawn("node", [SERVER_PATH], {
-    env,
-    stdio: ["pipe", "pipe", "pipe"]
-  });
-
-  serverProcess.stdout.on("data", (data) => {
-    if (process.env.VERBOSE_TESTS) {
-      process.stdout.write(`[server] ${data}`);
-    }
-  });
-  serverProcess.stderr.on("data", (data) => {
-    if (process.env.VERBOSE_TESTS) {
-      process.stderr.write(`[server err] ${data}`);
-    }
-  });
-
-  await waitForServer();
-}
-
-async function stopServer() {
-  if (serverProcess) {
-    serverProcess.kill();
-    serverProcess = null;
-  }
-}
-
-async function removeDir(dir) {
-  try {
-    await fs.rm(dir, { recursive: true, force: true });
-  } catch (e) {
-  }
-}
+const { createTestHarness } = require("./helpers/test-harness");
 
 describe("Backup and Restore Flow", () => {
+  let harness;
   let adminToken;
 
   before(async () => {
-    testDataDir = createTempDir();
-    await fs.mkdir(path.join(testDataDir, "backups"), { recursive: true });
-    await startServer(testDataDir);
-    adminToken = await login("admin");
+    harness = await createTestHarness();
+    await harness.start();
+    adminToken = await harness.loginAsAdmin();
   });
 
   after(async () => {
-    await stopServer();
-    await removeDir(testDataDir);
+    if (harness) {
+      await harness.cleanup();
+    }
   });
 
   test("should create a backup successfully", async () => {
-    const res = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const res = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(res.status, 201);
@@ -158,13 +34,13 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should validate a backup successfully", async () => {
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const validateRes = await request("GET", `/backups/${backupId}/validate`, {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const validateRes = await harness.request("GET", `/backups/${backupId}/validate`, {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(validateRes.status, 200);
@@ -175,13 +51,13 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should preview backup diff and return confirmation token", async () => {
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const previewRes = await request("POST", `/backups/${backupId}/preview`, {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const previewRes = await harness.request("POST", `/backups/${backupId}/preview`, {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(previewRes.status, 200);
@@ -198,13 +74,13 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should reject restore when confirmation token is missing", async () => {
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const restoreRes = await request("POST", `/backups/${backupId}/restore`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const restoreRes = await harness.request("POST", `/backups/${backupId}/restore`, {
+      headers: harness.authHeaders(adminToken),
       body: {}
     });
 
@@ -214,8 +90,8 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should restore successfully with valid confirmation token", async () => {
-    const clockRes = await request("POST", "/clocks", {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const clockRes = await harness.request("POST", "/clocks", {
+      headers: harness.authHeaders(adminToken),
       body: {
         code: "CLK-TEST-001",
         escapementType: "瑞士杠杆式",
@@ -226,13 +102,13 @@ describe("Backup and Restore Flow", () => {
     assert.equal(clockRes.status, 201);
     const clockId = clockRes.body.data.id;
 
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const secondClockRes = await request("POST", "/clocks", {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const secondClockRes = await harness.request("POST", "/clocks", {
+      headers: harness.authHeaders(adminToken),
       body: {
         code: "CLK-TEST-002",
         escapementType: "英国销轮式",
@@ -242,18 +118,18 @@ describe("Backup and Restore Flow", () => {
     });
     assert.equal(secondClockRes.status, 201);
 
-    const clocksBeforeRes = await request("GET", "/clocks", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const clocksBeforeRes = await harness.request("GET", "/clocks", {
+      headers: harness.authHeaders(adminToken)
     });
     const clocksBeforeCount = clocksBeforeRes.body.data.length;
 
-    const previewRes = await request("POST", `/backups/${backupId}/preview`, {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const previewRes = await harness.request("POST", `/backups/${backupId}/preview`, {
+      headers: harness.authHeaders(adminToken)
     });
     const confirmationToken = previewRes.body.data.confirmationToken;
 
-    const restoreRes = await request("POST", `/backups/${backupId}/restore`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const restoreRes = await harness.request("POST", `/backups/${backupId}/restore`, {
+      headers: harness.authHeaders(adminToken),
       body: { confirmationToken }
     });
 
@@ -264,8 +140,8 @@ describe("Backup and Restore Flow", () => {
     assert.equal(restoreRes.body.data.tokenVerified, true);
     assert.ok(restoreRes.body.data.restoredAt);
 
-    const clocksAfterRes = await request("GET", "/clocks", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const clocksAfterRes = await harness.request("GET", "/clocks", {
+      headers: harness.authHeaders(adminToken)
     });
     const clocksAfterCount = clocksAfterRes.body.data.length;
 
@@ -279,13 +155,13 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should reject restore with invalid confirmation token", async () => {
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const restoreRes = await request("POST", `/backups/${backupId}/restore`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const restoreRes = await harness.request("POST", `/backups/${backupId}/restore`, {
+      headers: harness.authHeaders(adminToken),
       body: { confirmationToken: "invalid_token_12345" }
     });
 
@@ -295,8 +171,8 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should return 404 for non-existent backup validation", async () => {
-    const res = await request("GET", "/backups/nonexistent_backup/validate", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const res = await harness.request("GET", "/backups/nonexistent_backup/validate", {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(res.status, 400);
@@ -304,15 +180,15 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should list backups", async () => {
-    await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
-    await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
 
-    const res = await request("GET", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const res = await harness.request("GET", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(res.status, 200);
@@ -322,28 +198,28 @@ describe("Backup and Restore Flow", () => {
   });
 
   test("should reject backup operations for technician role", async () => {
-    const techToken = await login("zhang");
+    const techToken = await harness.loginAsTechnician("zhang");
 
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${techToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(techToken)
     });
     assert.equal(createRes.status, 403);
     assert.equal(createRes.body.code, "PERMISSION_DENIED");
 
-    const listRes = await request("GET", "/backups", {
-      headers: { Authorization: `Bearer ${techToken}` }
+    const listRes = await harness.request("GET", "/backups", {
+      headers: harness.authHeaders(techToken)
     });
     assert.equal(listRes.status, 403);
   });
 
   test("preview diff should show modifications correctly", async () => {
-    const createRes = await request("POST", "/backups", {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const createRes = await harness.request("POST", "/backups", {
+      headers: harness.authHeaders(adminToken)
     });
     const backupId = createRes.body.data.id;
 
-    const clockRes = await request("POST", "/clocks", {
-      headers: { Authorization: `Bearer ${adminToken}` },
+    const clockRes = await harness.request("POST", "/clocks", {
+      headers: harness.authHeaders(adminToken),
       body: {
         code: "CLK-DIFF-TEST",
         escapementType: "德国工字轮式",
@@ -352,8 +228,8 @@ describe("Backup and Restore Flow", () => {
     });
     assert.equal(clockRes.status, 201);
 
-    const previewRes = await request("POST", `/backups/${backupId}/preview`, {
-      headers: { Authorization: `Bearer ${adminToken}` }
+    const previewRes = await harness.request("POST", `/backups/${backupId}/preview`, {
+      headers: harness.authHeaders(adminToken)
     });
 
     assert.equal(previewRes.status, 200);

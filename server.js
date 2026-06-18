@@ -5219,6 +5219,26 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Clock escapement tuning API running at http://127.0.0.1:${PORT}`);
-});
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+  server.close(() => {
+    console.log("Server closed.");
+    process.exit(0);
+  });
+  const forceTimeout = setTimeout(() => {
+    console.error("Force shutdown after 5s timeout.");
+    process.exit(1);
+  }, 5000);
+  forceTimeout.unref();
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Clock escapement tuning API running at http://127.0.0.1:${PORT}`);
+  });
+}
+
+module.exports = { server, gracefulShutdown, PORT, DATA_DIR, DB_FILE, BACKUP_DIR };

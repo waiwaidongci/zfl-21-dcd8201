@@ -18,3 +18,8 @@ coverage/
 .vscode/
 
 *.log
+
+test/tmp/
+test-data-*/
+clock-api-test-*/
+backup-test-*/
