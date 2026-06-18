@@ -100,6 +100,7 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.RETEST_TASK_CREATE,
     PERMISSIONS.RETEST_TASK_UPDATE,
     PERMISSIONS.RETEST_TASK_CANCEL,
+    PERMISSIONS.AUDIT_VIEW,
     PERMISSIONS.OVERVIEW_VIEW,
     PERMISSIONS.HEALTH_SCORE_RULE_VIEW,
     PERMISSIONS.WORKFLOW_VIEW,
@@ -2785,22 +2786,13 @@ async function handle(req, res) {
 
   if (req.method === "GET" && pathname === "/auth/me") {
     const token = getTokenFromRequest(req);
-    let user = null;
-    let sessionInfo = null;
-    if (token) {
-      const session = findSessionByToken(db, token);
-      if (session && isSessionValid(session)) {
-        user = db.users.find((u) => u.id === session.userId) || null;
-        sessionInfo = {
-          createdAt: session.createdAt,
-          expiresAt: session.expiresAt,
-          lastAccessedAt: session.lastAccessedAt
-        };
-      }
-    }
-    if (!user) {
-      return send(res, 200, { data: null, roles: USER_ROLES, permissions: [], authErrorCodes: AUTH_ERROR_CODES });
-    }
+    const user = requireAuth(req, db);
+    const session = findSessionByToken(db, token);
+    const sessionInfo = {
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      lastAccessedAt: session.lastAccessedAt
+    };
     return send(res, 200, {
       data: {
         ...userSummary(user),
@@ -2838,10 +2830,9 @@ async function handle(req, res) {
 
   if (req.method === "POST" && pathname === "/auth/logout") {
     const token = getTokenFromRequest(req);
-    if (token) {
-      revokeSession(db, token);
-      await writeDb(db);
-    }
+    requireAuth(req, db);
+    revokeSession(db, token);
+    await writeDb(db);
     return send(res, 200, { message: "已退出登录" });
   }
 
@@ -3733,6 +3724,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/workflow/statuses") {
+    requirePermission(req, db, PERMISSIONS.WORKFLOW_VIEW);
     return send(res, 200, {
       data: {
         statuses: WORKFLOW_STATUSES,
