@@ -24,6 +24,9 @@
 - [主要接口](#主要接口)
 - [环境变量](#环境变量)
 - [闭环示例](#闭环示例)
+- [批量导入示例](#批量导入示例)
+- [师傅交接记录示例](#师傅交接记录示例)
+- [复测任务改期与取消示例](#复测任务改期与取消示例)
 
 ---
 
@@ -341,6 +344,14 @@ curl http://127.0.0.1:3021/auth/me \
 | `TOKEN_INVALID` | 401 | Token无效或已注销 |
 | `PERMISSION_DENIED` | 403 | 无权限执行此操作 |
 
+错误响应示例：
+```json
+{
+  "error": "认证令牌已过期，请重新登录",
+  "code": "TOKEN_EXPIRED"
+}
+```
+
 ---
 
 ## 内置用户
@@ -415,4 +426,298 @@ curl -X POST http://127.0.0.1:3021/clocks/clock_demo/retests \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"dailyRateSeconds":12,"amplitude":252,"note":"复测进入目标范围"}'
+```
+
+## 批量导入示例
+
+### 字段规范化规则
+
+导入时会自动进行以下规范化处理：
+- **编号(code)、擒纵类型(escapementType)、摆频(balanceFrequency)**：自动清理前后空格
+- **targetDailyRateSeconds**：校验必须是有效数字（可省略，默认 30）
+- **assignedTechnicianId**：支持用**用户ID**或**用户名**指定负责人
+
+### 第一步：登录获取Token
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
+
+### 第二步：预览导入结果
+
+```bash
+curl -X POST http://127.0.0.1:3021/clocks/import/preview \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "clocks": [
+      {
+        "code":"  CLK-1900-01  ",
+        "escapementType":"  英国销轮式  ",
+        "balanceFrequency":"  16000vph  ",
+        "targetDailyRateSeconds":30,
+        "note":"爱德华时期座钟（字段前后空格会被自动清理）",
+        "assignedTechnicianId": "zhang"
+      },
+      {
+        "code":"CLK-1890-07",
+        "escapementType":"瑞士杠杆式",
+        "balanceFrequency":"18000vph",
+        "note":"重复编号测试"
+      },
+      {
+        "code":"CLK-1910-05",
+        "escapementType":"",
+        "balanceFrequency":"21600vph",
+        "note":"缺少擒纵类型"
+      },
+      {
+        "code":"CLK-INVALID-01",
+        "escapementType":"瑞士杠杆式",
+        "balanceFrequency":"18000vph",
+        "targetDailyRateSeconds":"not-a-number",
+        "note":"targetDailyRateSeconds 不是数字"
+      },
+      {
+        "code":"CLK-TECH-NOEXIST",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "nobody",
+        "note":"指定不存在的负责人用户名"
+      },
+      {
+        "code":"CLK-1920-12",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "user_tech_wang",
+        "note":"用用户ID指定负责人"
+      }
+    ]
+  }'
+```
+
+预览返回结构：
+- `summary`：汇总统计（total/importable/unimportable）及全局负责人信息
+- `importable`：可导入记录，每条包含：
+  - `normalized`：规范化后的字段值
+  - `changes`：被清理的前后空格（如有）
+  - `targetDailyRateSeconds`：数字校验后的结果
+  - `technician`：负责人摘要（id/username/name/role/matchedBy/source）
+- `unimportable`：不可导入记录，每条包含：
+  - `normalized`：规范化后的字段值
+  - `reasons`：不可导入原因列表
+  - `technician`：负责人解析信息（如有错误）
+
+### 第三步：确认写入（支持全局指定负责人）
+
+可通过顶层 `assignedTechnicianId` 为所有记录统一指定负责人（优先级低于单条记录内的指定），同样支持用户名或用户ID：
+
+```bash
+curl -X POST http://127.0.0.1:3021/clocks/import \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "assignedTechnicianId": "zhang",
+    "clocks": [
+      {
+        "code":"  CLK-1900-01  ",
+        "escapementType":"  英国销轮式  ",
+        "balanceFrequency":"  16000vph  ",
+        "targetDailyRateSeconds":30,
+        "note":"字段空格会被自动清理"
+      },
+      {
+        "code":"CLK-1920-12",
+        "escapementType":"德国工字轮式",
+        "balanceFrequency":"14400vph",
+        "targetDailyRateSeconds":25,
+        "assignedTechnicianId": "user_tech_wang",
+        "note":"单条指定优先于全局指定（用用户ID指定王师傅）"
+      }
+    ]
+  }'
+```
+
+正式导入返回结构：
+- `summary`：汇总统计（total/created/unimportable）及全局负责人信息
+- `created`：成功创建的记录，每条包含规范化结果、负责人摘要、完整钟表信息
+- `unimportable`：不可导入记录，包含不可导入原因
+
+### 第四步：验证新档案已写入
+
+```bash
+curl http://127.0.0.1:3021/clocks \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+## 师傅交接记录示例
+
+### 登录获取Token（张师傅）
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"zhang"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
+
+### 新增交接记录
+
+为指定钟表登记交接备注、下一步处理建议和接手人：
+
+```bash
+curl -X POST http://127.0.0.1:3021/clocks/clock_demo/handovers \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "handoverNote": "机芯已拆解清洗完毕，游丝有轻微变形需注意",
+    "nextStepSuggestion": "建议先调校游丝外桩，再进行走时精度测试",
+    "receiver": "王师傅"
+  }'
+```
+
+必填字段：`handoverNote`（交接备注）、`receiver`（接手人）
+可选字段：`nextStepSuggestion`（下一步处理建议）
+
+### 按钟表查看交接历史
+
+查看某只钟表的所有交接记录，按时间倒序排列：
+
+```bash
+curl http://127.0.0.1:3021/clocks/clock_demo/handovers \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 查询所有交接记录（支持按钟表筛选）
+
+```bash
+# 查询所有交接记录
+curl http://127.0.0.1:3021/handovers \
+  -H "Authorization: Bearer $TOKEN"
+
+# 按钟表筛选
+curl "http://127.0.0.1:3021/handovers?clockId=clock_demo" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 未登录时的错误提示
+
+```bash
+curl http://127.0.0.1:3021/clocks/nonexistent/handovers
+```
+
+返回：
+```json
+{
+  "error": "未提供认证令牌，请在 Authorization 头中携带 Bearer token",
+  "code": "TOKEN_MISSING"
+}
+```
+
+## 复测任务改期与取消示例
+
+### 登录获取Token（管理员）
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:3021/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+```
+
+### 改期复测任务
+
+修改待复测任务的计划复测时间、优先级或备注。只有 **管理员** 或 **该钟表的负责人** 可以操作，且 **已完成** 或 **已取消** 的任务不能改期。
+
+```bash
+curl -X PUT http://127.0.0.1:3021/retest-tasks/retestTask_demo \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "plannedRetestAt": "2026-07-05T00:00:00.000Z",
+    "priority": "high",
+    "note": "客户要求提前复测，改为高优先级"
+  }'
+```
+
+可修改字段（均可选，至少传一个）：
+- `plannedRetestAt`：新的计划复测时间（ISO 8601）
+- `priority`：优先级，`high` / `medium` / `low`
+- `note`：备注
+
+返回中包含：
+- `cancelledAt`：取消时间（未取消则为 `null`）
+- `cancelledBy`：取消人ID（未取消则为 `null`）
+- `cancelReason`：取消原因（未取消则为 `null`）
+- `canceller`：取消人详情对象（包含 `id`、`name`、`role`）
+
+### 取消复测任务
+
+取消一个处于 `pending` 状态的复测任务，并记录取消原因。权限规则同改期。**已完成** 或 **已取消** 的任务不能再取消。
+
+```bash
+curl -X POST http://127.0.0.1:3021/retest-tasks/retestTask_demo/cancel \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "cancelReason": "客户临时送修其他故障，复测延后安排"
+  }'
+```
+
+必填字段：`cancelReason`（取消原因）
+
+取消成功后任务的 `status` 变为 `"cancelled"`，同时写入：
+- `cancelledAt`：取消时间
+- `cancelledBy`：操作人ID
+- `cancelReason`：取消原因
+- `canceller`：操作人详情（列表接口返回）
+
+### 查看任务列表（含取消信息）
+
+复测任务列表（`GET /retest-tasks`）和单只钟表任务列表（`GET /clocks/:id/retest-tasks`）都会返回取消相关字段。
+
+```bash
+# 全量任务（含已取消的）
+curl http://127.0.0.1:3021/retest-tasks \
+  -H "Authorization: Bearer $TOKEN"
+
+# 按状态筛选已取消的任务
+curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 权限与状态错误
+
+**无权限（非负责人且非管理员，使用技师Token访问其他负责人任务）：**
+```json
+{
+  "error": "无权限操作该复测任务",
+  "code": "PERMISSION_DENIED"
+}
+```
+
+**对已完成任务改期/取消：**
+```json
+{
+  "error": "已完成的复测任务不能改期",
+  "code": "TASK_ALREADY_COMPLETED"
+}
+```
+
+**对已取消任务改期：**
+```json
+{
+  "error": "已取消的复测任务不能改期",
+  "code": "TASK_ALREADY_CANCELLED"
+}
+```
+
+**Token过期：**
+```json
+{
+  "error": "认证令牌已过期，请重新登录",
+  "code": "TOKEN_EXPIRED"
+}
 ```
