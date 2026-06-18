@@ -1763,6 +1763,99 @@ function createAuditLog(db, params) {
   return log;
 }
 
+function createRetestRecord(db, { clock, body, currentUser, targetTask, adjustmentId, qualified, source }) {
+  const retest = {
+    id: makeId("retest"),
+    clockId: clock.id,
+    adjustmentId,
+    testedAt: body.testedAt || new Date().toISOString(),
+    dailyRateSeconds: Number(body.dailyRateSeconds),
+    amplitude: Number(body.amplitude),
+    qualified,
+    note: body.note || "",
+    ...(source === "workflow_complete_retest" ? { workflowOperation: WORKFLOW_OPERATIONS.COMPLETE_RETEST } : {}),
+    createdBy: currentUser.id
+  };
+  db.retests.push(retest);
+
+  createAuditLog(db, {
+    createdBy: currentUser.id,
+    operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
+    resourceType: AUDIT_RESOURCE_TYPES.RETEST,
+    resourceId: retest.id,
+    clockId: clock.id,
+    beforeSnapshot: null,
+    afterSnapshot: {
+      id: retest.id,
+      adjustmentId: retest.adjustmentId,
+      testedAt: retest.testedAt,
+      dailyRateSeconds: retest.dailyRateSeconds,
+      amplitude: retest.amplitude,
+      qualified: retest.qualified,
+      note: retest.note
+    },
+    changedFields: null
+  });
+
+  try {
+    const curStatus = deriveWorkflowStatus(db, clock.id);
+    if (source === "generic_retest" && curStatus === WORKFLOW_STATUSES.ARCHIVED) {
+      recordWorkflowEvent(db, {
+        clockId: clock.id,
+        eventType: WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK,
+        occurredAt: new Date(Date.now() - 1).toISOString(),
+        createdBy: currentUser.id,
+        note: "通过普通复测接口自动解档",
+        meta: { source: "generic_retest_unarchive" }
+      });
+    }
+    const evtType = retest.qualified
+      ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
+      : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
+    const meta = source === "generic_retest"
+      ? { source, statusBefore: curStatus, qualified: retest.qualified, dailyRateSeconds: retest.dailyRateSeconds, amplitude: retest.amplitude }
+      : { qualified: retest.qualified, dailyRateSeconds: retest.dailyRateSeconds, amplitude: retest.amplitude };
+    recordWorkflowEvent(db, {
+      clockId: clock.id,
+      eventType: evtType,
+      occurredAt: retest.testedAt,
+      createdBy: currentUser.id,
+      note: retest.note,
+      relatedAdjustmentId: retest.adjustmentId,
+      relatedRetestId: retest.id,
+      meta
+    });
+  } catch (_) {}
+
+  if (db.retestTasks) {
+    let matchingTask = targetTask;
+    if (!matchingTask) {
+      const pendingTasks = db.retestTasks.filter(
+        (t) => t.clockId === clock.id && t.status === "pending"
+      );
+      if (adjustmentId) {
+        const sameAdjustmentTasks = pendingTasks.filter((t) => t.adjustmentId === adjustmentId);
+        if (sameAdjustmentTasks.length > 0) {
+          matchingTask = sameAdjustmentTasks.sort(
+            (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+          )[0];
+        }
+      } else if (pendingTasks.length > 0) {
+        matchingTask = pendingTasks.sort(
+          (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
+        )[0];
+      }
+    }
+    if (matchingTask) {
+      matchingTask.status = "completed";
+      matchingTask.completedAt = new Date().toISOString();
+      matchingTask.completedRetestId = retest.id;
+    }
+  }
+
+  return retest;
+}
+
 function enrichAuditLog(db, log) {
   const safeLog = {
     id: log.id,
@@ -3948,78 +4041,7 @@ async function handle(req, res) {
       ? Boolean(body.qualified)
       : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
 
-    const retest = {
-      id: makeId("retest"),
-      clockId: clock.id,
-      adjustmentId,
-      testedAt: body.testedAt || new Date().toISOString(),
-      dailyRateSeconds: Number(body.dailyRateSeconds),
-      amplitude: Number(body.amplitude),
-      qualified,
-      note: body.note || "",
-      workflowOperation: WORKFLOW_OPERATIONS.COMPLETE_RETEST,
-      createdBy: currentUser.id
-    };
-    db.retests.push(retest);
-    createAuditLog(db, {
-      createdBy: currentUser.id,
-      createdBy: currentUser.id,
-        operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
-      resourceType: AUDIT_RESOURCE_TYPES.RETEST,
-      resourceId: retest.id,
-      clockId: clock.id,
-      beforeSnapshot: null,
-      afterSnapshot: {
-        id: retest.id,
-        adjustmentId: retest.adjustmentId,
-        testedAt: retest.testedAt,
-        dailyRateSeconds: retest.dailyRateSeconds,
-        amplitude: retest.amplitude,
-        qualified: retest.qualified,
-        note: retest.note
-      },
-      changedFields: null
-    });
-    try {
-      const evtType = retest.qualified
-        ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
-        : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
-      recordWorkflowEvent(db, {
-        clockId: clock.id,
-        eventType: evtType,
-        occurredAt: retest.testedAt,
-        createdBy: currentUser.id,
-        note: retest.note,
-        relatedAdjustmentId: retest.adjustmentId,
-        relatedRetestId: retest.id,
-        meta: { qualified: retest.qualified, dailyRateSeconds: retest.dailyRateSeconds, amplitude: retest.amplitude }
-      });
-    } catch (_) {}
-    if (db.retestTasks) {
-      let matchingTask = targetTask;
-      if (!matchingTask) {
-        const pendingTasks = db.retestTasks.filter(
-          (t) => t.clockId === clock.id && t.status === "pending"
-        );
-        if (adjustmentId) {
-          const sameAdjustmentTasks = pendingTasks.filter((t) => t.adjustmentId === adjustmentId);
-          if (sameAdjustmentTasks.length > 0) {
-            matchingTask = sameAdjustmentTasks.sort(
-              (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
-            )[0];
-          }
-        } else if (pendingTasks.length > 0) {
-          matchingTask = pendingTasks.sort(
-            (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
-          )[0];
-        }
-      }
-      if (matchingTask) {
-        matchingTask.status = "completed";
-        matchingTask.completedAt = new Date().toISOString();
-        matchingTask.completedRetestId = retest.id;
-      }
-    }
+    const retest = createRetestRecord(db, { clock, body, currentUser, targetTask, adjustmentId, qualified, source: "workflow_complete_retest" });
     await writeDb(db);
     return send(res, 201, {
       data: enrichWithCreator(db, retest),
@@ -4369,94 +4391,7 @@ async function handle(req, res) {
       ? Boolean(body.qualified)
       : Math.abs(Number(body.dailyRateSeconds)) <= Number(clock.targetDailyRateSeconds);
 
-    const retest = {
-      id: makeId("retest"),
-      clockId: clock.id,
-      adjustmentId,
-      testedAt: body.testedAt || new Date().toISOString(),
-      dailyRateSeconds: Number(body.dailyRateSeconds),
-      amplitude: Number(body.amplitude),
-      qualified,
-      note: body.note || "",
-      createdBy: currentUser.id
-    };
-    db.retests.push(retest);
-    createAuditLog(db, {
-      createdBy: currentUser.id,
-      createdBy: currentUser.id,
-        operationType: AUDIT_OPERATION_TYPES.RETEST_CREATE,
-      resourceType: AUDIT_RESOURCE_TYPES.RETEST,
-      resourceId: retest.id,
-      clockId: clock.id,
-      beforeSnapshot: null,
-      afterSnapshot: {
-        id: retest.id,
-        adjustmentId: retest.adjustmentId,
-        testedAt: retest.testedAt,
-        dailyRateSeconds: retest.dailyRateSeconds,
-        amplitude: retest.amplitude,
-        qualified: retest.qualified,
-        note: retest.note
-      },
-      changedFields: null
-    });
-    try {
-      const curStatus = deriveWorkflowStatus(db, clock.id);
-      if (curStatus === WORKFLOW_STATUSES.ARCHIVED) {
-        recordWorkflowEvent(db, {
-          clockId: clock.id,
-          eventType: WORKFLOW_EVENT_TYPES.UNARCHIVED_FOR_RECHECK,
-          occurredAt: new Date(Date.now() - 1).toISOString(),
-          createdBy: currentUser.id,
-          note: "通过普通复测接口自动解档",
-          meta: { source: "generic_retest_unarchive" }
-        });
-      }
-      const evtType = retest.qualified
-        ? WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_PASSED
-        : WORKFLOW_EVENT_TYPES.COMPLETED_RETEST_FAILED;
-      recordWorkflowEvent(db, {
-        clockId: clock.id,
-        eventType: evtType,
-        occurredAt: retest.testedAt,
-        createdBy: currentUser.id,
-        note: retest.note,
-        relatedAdjustmentId: retest.adjustmentId,
-        relatedRetestId: retest.id,
-        meta: {
-          source: "generic_retest",
-          statusBefore: curStatus,
-          qualified: retest.qualified,
-          dailyRateSeconds: retest.dailyRateSeconds,
-          amplitude: retest.amplitude
-        }
-      });
-    } catch (_) {}
-    if (db.retestTasks) {
-      let matchingTask = targetTask;
-      if (!matchingTask) {
-        const pendingTasks = db.retestTasks.filter(
-          (t) => t.clockId === clock.id && t.status === "pending"
-        );
-        if (adjustmentId) {
-          const sameAdjustmentTasks = pendingTasks.filter((t) => t.adjustmentId === adjustmentId);
-          if (sameAdjustmentTasks.length > 0) {
-            matchingTask = sameAdjustmentTasks.sort(
-              (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
-            )[0];
-          }
-        } else if (pendingTasks.length > 0) {
-          matchingTask = pendingTasks.sort(
-            (a, b) => new Date(a.plannedRetestAt) - new Date(b.plannedRetestAt)
-          )[0];
-        }
-      }
-      if (matchingTask) {
-        matchingTask.status = "completed";
-        matchingTask.completedAt = new Date().toISOString();
-        matchingTask.completedRetestId = retest.id;
-      }
-    }
+    const retest = createRetestRecord(db, { clock, body, currentUser, targetTask, adjustmentId, qualified, source: "generic_retest" });
     await writeDb(db);
     return send(res, 201, {
       data: enrichWithCreator(db, retest),
