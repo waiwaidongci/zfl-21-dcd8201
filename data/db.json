@@ -59,17 +59,6 @@
       "note": "初次调校，先保守处理",
       "createdAt": "2026-06-17T10:22:49.431Z",
       "createdBy": "user_system"
-    },
-    {
-      "id": "adjustment_mqj2dlhb_z27smr",
-      "clockId": "clock_demo",
-      "currentDailyRateSeconds": 3,
-      "direction": "慢针方向",
-      "amount": "微调0.2格",
-      "note": "",
-      "createdAt": "2026-06-18T05:33:21.791Z",
-      "workflowOperation": "submit_retest",
-      "createdBy": "user_admin_default"
     }
   ],
   "retests": [
@@ -83,29 +72,6 @@
       "qualified": false,
       "note": "仍偏快，振幅尚可",
       "createdBy": "user_system"
-    },
-    {
-      "id": "retest_mqj2da8k_yuhzia",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_demo",
-      "testedAt": "2026-06-18T05:33:07.220Z",
-      "dailyRateSeconds": 2.5,
-      "amplitude": 280,
-      "qualified": true,
-      "note": "",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "retest_mqj2dqr9_pfuag6",
-      "clockId": "clock_demo",
-      "adjustmentId": "adjustment_mqj2dlhb_z27smr",
-      "testedAt": "2026-06-18T05:33:28.629Z",
-      "dailyRateSeconds": 1.8,
-      "amplitude": 290,
-      "qualified": true,
-      "note": "",
-      "workflowOperation": "complete_retest",
-      "createdBy": "user_admin_default"
     }
   ],
   "handovers": [
@@ -129,9 +95,9 @@
       "adjustmentId": "adjustment_demo",
       "plannedRetestAt": "2026-06-24T10:22:49.431Z",
       "priority": "medium",
-      "status": "completed",
-      "completedAt": "2026-06-18T05:33:07.221Z",
-      "completedRetestId": "retest_mqj2da8k_yuhzia",
+      "status": "pending",
+      "completedAt": null,
+      "completedRetestId": null,
       "cancelledAt": null,
       "cancelledBy": null,
       "cancelReason": null,
@@ -209,67 +175,6 @@
       "summary": "创建用户 li（李师傅），角色：technician",
       "createdAt": "2026-06-17T15:06:10.171Z",
       "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqj2da8k_jzk4qd",
-      "operationType": "retest_create",
-      "resourceType": "retest",
-      "resourceId": "retest_mqj2da8k_yuhzia",
-      "clockId": "clock_demo",
-      "beforeSnapshot": null,
-      "afterSnapshot": {
-        "id": "retest_mqj2da8k_yuhzia",
-        "adjustmentId": "adjustment_demo",
-        "testedAt": "2026-06-18T05:33:07.220Z",
-        "dailyRateSeconds": 2.5,
-        "amplitude": 280,
-        "qualified": true,
-        "note": ""
-      },
-      "changedFields": null,
-      "summary": "新增复测记录，日差：2.5秒/天，振幅：280，合格：是",
-      "createdAt": "2026-06-18T05:33:07.221Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqj2dlhb_zst965",
-      "operationType": "adjustment_create",
-      "resourceType": "adjustment",
-      "resourceId": "adjustment_mqj2dlhb_z27smr",
-      "clockId": "clock_demo",
-      "beforeSnapshot": null,
-      "afterSnapshot": {
-        "id": "adjustment_mqj2dlhb_z27smr",
-        "currentDailyRateSeconds": 3,
-        "direction": "慢针方向",
-        "amount": "微调0.2格",
-        "note": ""
-      },
-      "changedFields": null,
-      "summary": "新增调校记录，方向：慢针方向，调整量：微调0.2格",
-      "createdAt": "2026-06-18T05:33:21.791Z",
-      "createdBy": "user_admin_default"
-    },
-    {
-      "id": "audit_mqj2dqr9_ptucdf",
-      "operationType": "retest_create",
-      "resourceType": "retest",
-      "resourceId": "retest_mqj2dqr9_pfuag6",
-      "clockId": "clock_demo",
-      "beforeSnapshot": null,
-      "afterSnapshot": {
-        "id": "retest_mqj2dqr9_pfuag6",
-        "adjustmentId": "adjustment_mqj2dlhb_z27smr",
-        "testedAt": "2026-06-18T05:33:28.629Z",
-        "dailyRateSeconds": 1.8,
-        "amplitude": 290,
-        "qualified": true,
-        "note": ""
-      },
-      "changedFields": null,
-      "summary": "新增复测记录，日差：1.8秒/天，振幅：290，合格：是",
-      "createdAt": "2026-06-18T05:33:28.629Z",
-      "createdBy": "user_admin_default"
     }
   ],
   "workflowEvents": [
@@ -299,49 +204,6 @@
       "meta": {
         "source": "migration_legacy",
         "qualified": false
-      }
-    },
-    {
-      "id": "wfevt_mqj2da8l_eahv9x",
-      "clockId": "clock_demo",
-      "eventType": "completed_retest_passed",
-      "occurredAt": "2026-06-18T05:33:07.220Z",
-      "createdBy": "user_admin_default",
-      "note": "",
-      "relatedAdjustmentId": "adjustment_demo",
-      "relatedRetestId": "retest_mqj2da8k_yuhzia",
-      "meta": {
-        "source": "generic_retest",
-        "statusBefore": "retest_failed",
-        "qualified": true,
-        "dailyRateSeconds": 2.5,
-        "amplitude": 280
-      }
-    },
-    {
-      "id": "wfevt_mqj2dlhb_zao467",
-      "clockId": "clock_demo",
-      "eventType": "submitted_retest",
-      "occurredAt": "2026-06-18T05:33:21.791Z",
-      "createdBy": "user_admin_default",
-      "note": "",
-      "relatedAdjustmentId": "adjustment_mqj2dlhb_z27smr",
-      "relatedRetestId": null,
-      "meta": null
-    },
-    {
-      "id": "wfevt_mqj2dqr9_1usog7",
-      "clockId": "clock_demo",
-      "eventType": "completed_retest_passed",
-      "occurredAt": "2026-06-18T05:33:28.629Z",
-      "createdBy": "user_admin_default",
-      "note": "",
-      "relatedAdjustmentId": "adjustment_mqj2dlhb_z27smr",
-      "relatedRetestId": "retest_mqj2dqr9_pfuag6",
-      "meta": {
-        "qualified": true,
-        "dailyRateSeconds": 1.8,
-        "amplitude": 290
       }
     }
   ],
@@ -377,14 +239,6 @@
       "expiresAt": "2026-06-17T17:09:26.391Z",
       "revokedAt": "2026-06-17T15:09:26.539Z",
       "lastAccessedAt": "2026-06-17T15:09:26.539Z"
-    },
-    {
-      "id": "tok_0cb666d7923db692c102a86ebde2923fac3f1d19a35b834a",
-      "userId": "user_admin_default",
-      "createdAt": "2026-06-18T05:33:00.123Z",
-      "expiresAt": "2026-06-18T07:33:00.123Z",
-      "revokedAt": null,
-      "lastAccessedAt": "2026-06-18T05:33:28.628Z"
     }
   ]
 }
