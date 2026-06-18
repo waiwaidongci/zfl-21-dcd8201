@@ -441,3 +441,45 @@ curl "http://127.0.0.1:3021/retest-tasks?status=cancelled" \
   "code": "TOKEN_EXPIRED"
 }
 ```
+
+## 测试
+
+项目使用 Node.js 内置测试运行器（`node:test`），无需额外安装依赖。测试使用独立临时数据目录，不会污染 `data/db.json` 和 `data/backups` 中的真实数据。
+
+### 运行测试
+
+```bash
+node --test test/backup-restore.test.js
+```
+
+### 详细输出
+
+```bash
+VERBOSE_TESTS=1 node --test test/backup-restore.test.js
+```
+
+### 测试覆盖范围
+
+备份恢复流程测试覆盖以下主路径：
+
+| 测试用例 | 说明 |
+|---|---|
+| 创建备份 | `POST /backups` 成功创建备份，返回备份信息 |
+| 校验备份 | `GET /backups/:id/validate` 验证备份文件完整性和结构 |
+| 预览差异 | `POST /backups/:id/preview` 返回差异对比和确认令牌 |
+| 缺少确认token拒绝恢复 | 恢复时不携带确认 token 返回 400 错误 |
+| 有效确认token恢复成功 | 携带预览获取的有效 token 成功恢复数据 |
+| 无效token拒绝恢复 | 使用伪造或无效 token 恢复被拒绝 |
+| 不存在的备份 | 验证不存在的备份返回 404 |
+| 备份列表 | `GET /backups` 返回备份列表 |
+| 技师权限控制 | 技师角色无权限执行备份操作 |
+| 差异预览正确性 | 新增数据后预览差异能正确显示变更 |
+
+### 环境变量
+
+测试支持通过以下环境变量配置：
+
+- `DATA_DIR`：数据目录路径
+- `DB_FILE`：数据库文件路径
+- `BACKUP_DIR`：备份目录路径
+- `CONFIRMATION_TOKEN_SECRET`：确认令牌签名密钥

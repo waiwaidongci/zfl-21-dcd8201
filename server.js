@@ -4,8 +4,9 @@ const { readFile, writeFile, mkdir, readdir, stat, unlink, rename } = require("f
 const path = require("path");
 
 const PORT = Number(process.env.PORT || 3021);
-const DB_FILE = path.join(__dirname, "data", "db.json");
-const BACKUP_DIR = path.join(__dirname, "data", "backups");
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, "db.json");
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, "backups");
 
 const BACKUP_ERROR_CODES = {
   BACKUP_NOT_FOUND: "BACKUP_NOT_FOUND",
@@ -1318,13 +1319,17 @@ async function validateBackup(backupId) {
 }
 
 async function restoreBackup(backupId, confirmationToken) {
+  if (!confirmationToken) {
+    const error = new Error("恢复操作需要确认令牌，请先通过预览接口获取确认令牌");
+    error.status = 400;
+    error.code = "CONFIRMATION_TOKEN_REQUIRED";
+    throw error;
+  }
+
   const validation = await validateBackup(backupId);
   const filePath = getBackupFilePath(backupId);
-
-  if (confirmationToken) {
-    const currentFileHash = await computeBackupFileHash(filePath);
-    verifyConfirmationToken(confirmationToken, backupId, currentFileHash);
-  }
+  const currentFileHash = await computeBackupFileHash(filePath);
+  verifyConfirmationToken(confirmationToken, backupId, currentFileHash);
 
   const rawContent = await readFile(filePath, "utf8");
   const parsed = JSON.parse(rawContent);
