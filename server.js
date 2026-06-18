@@ -95,9 +95,11 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.HANDOVER_CREATE,
     PERMISSIONS.SUGGESTION_VIEW,
     PERMISSIONS.SUGGESTION_CREATE,
+    PERMISSIONS.SUGGESTION_STATUS_UPDATE,
     PERMISSIONS.RETEST_TASK_VIEW,
     PERMISSIONS.RETEST_TASK_CREATE,
     PERMISSIONS.RETEST_TASK_UPDATE,
+    PERMISSIONS.RETEST_TASK_CANCEL,
     PERMISSIONS.OVERVIEW_VIEW,
     PERMISSIONS.HEALTH_SCORE_RULE_VIEW,
     PERMISSIONS.WORKFLOW_VIEW,
@@ -247,6 +249,7 @@ const initialData = {
 const AUDIT_OPERATION_TYPES = {
   CLOCK_CREATE: "clock_create",
   CLOCK_UPDATE: "clock_update",
+  CLOCK_DELETE: "clock_delete",
   ADJUSTMENT_CREATE: "adjustment_create",
   RETEST_CREATE: "retest_create",
   HANDOVER_CREATE: "handover_create",
@@ -649,6 +652,7 @@ const routes = [
   "GET /clocks",
   "POST /clocks",
   "PUT /clocks/:id",
+  "DELETE /clocks/:id",
   "PUT /clocks/:id/assign",
   "POST /clocks/import/preview",
   "POST /clocks/import",
@@ -1670,9 +1674,11 @@ function buildAuditSummary(operationType, resourceType, beforeSnapshot, afterSna
     case AUDIT_OPERATION_TYPES.CLOCK_UPDATE:
       if (changedFields) {
         const fieldNames = changedFields.map((f) => f.field).join("、");
-        return `更新钟表档案 ${afterSnapshot?.code || ""} 关键字段：${fieldNames}`;
+        return `更新钟表档案 ${afterSnapshot?.code || beforeSnapshot?.code || ""} 关键字段：${fieldNames}`;
       }
-      return `更新钟表档案 ${afterSnapshot?.code || ""}`;
+      return `更新钟表档案 ${afterSnapshot?.code || beforeSnapshot?.code || ""}`;
+    case AUDIT_OPERATION_TYPES.CLOCK_DELETE:
+      return `删除钟表档案 ${beforeSnapshot?.code || ""}（${beforeSnapshot?.escapementType || ""}）`;
     case AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE:
       return `新增调校记录，方向：${afterSnapshot?.direction || ""}，调整量：${afterSnapshot?.amount || ""}`;
     case AUDIT_OPERATION_TYPES.RETEST_CREATE:
@@ -2665,7 +2671,14 @@ function requirePermission(req, db, permission) {
 }
 
 function requireAdmin(req, db) {
-  return requirePermission(req, db, PERMISSIONS.USER_CREATE);
+  const user = requireAuth(req, db);
+  if (user.role !== USER_ROLES.ADMIN) {
+    const error = new Error("此操作仅允许管理员执行");
+    error.status = 403;
+    error.code = AUTH_ERROR_CODES.PERMISSION_DENIED;
+    throw error;
+  }
+  return user;
 }
 
 function canAccessClock(clock, user) {
@@ -3234,6 +3247,51 @@ async function handle(req, res) {
     });
   }
 
+  if (clockUpdateMatch && req.method === "DELETE") {
+    requirePermission(req, db, PERMISSIONS.CLOCK_DELETE);
+    const clock = findClock(db, clockUpdateMatch[1]);
+    const beforeSnapshot = extractKeyFields(clock, CLOCK_KEY_FIELDS);
+
+    const adjustmentIds = db.adjustments.filter((a) => a.clockId === clock.id).map((a) => a.id);
+    const retestIds = db.retests.filter((r) => r.clockId === clock.id).map((r) => r.id);
+    const handoverIds = db.handovers.filter((h) => h.clockId === clock.id).map((h) => h.id);
+    const retestTaskIds = db.retestTasks.filter((t) => t.clockId === clock.id).map((t) => t.id);
+    const suggestionIds = db.suggestions.filter((s) => s.clockId === clock.id).map((s) => s.id);
+
+    db.adjustments = db.adjustments.filter((a) => a.clockId !== clock.id);
+    db.retests = db.retests.filter((r) => r.clockId !== clock.id);
+    db.handovers = db.handovers.filter((h) => h.clockId !== clock.id);
+    db.retestTasks = db.retestTasks.filter((t) => t.clockId !== clock.id);
+    db.suggestions = db.suggestions.filter((s) => s.clockId !== clock.id);
+    db.clocks = db.clocks.filter((c) => c.id !== clock.id);
+
+    createAuditLog(db, {
+      operationType: AUDIT_OPERATION_TYPES.CLOCK_DELETE,
+      resourceType: AUDIT_RESOURCE_TYPES.CLOCK,
+      resourceId: clock.id,
+      clockId: clock.id,
+      beforeSnapshot,
+      afterSnapshot: null,
+      changedFields: null,
+      createdBy: currentUser.id
+    });
+
+    await writeDb(db);
+    return send(res, 200, {
+      data: {
+        id: clock.id,
+        code: clock.code,
+        deletedCounts: {
+          adjustments: adjustmentIds.length,
+          retests: retestIds.length,
+          handovers: handoverIds.length,
+          retestTasks: retestTaskIds.length,
+          suggestions: suggestionIds.length
+        }
+      }
+    });
+  }
+
   const clockAssignMatch = pathname.match(/^\/clocks\/([^/]+)\/assign$/);
   if (clockAssignMatch && req.method === "PUT") {
     requirePermission(req, db, PERMISSIONS.CLOCK_ASSIGN);
@@ -3555,6 +3613,7 @@ async function handle(req, res) {
     const operationTypeLabels = {
       [AUDIT_OPERATION_TYPES.CLOCK_CREATE]: "创建档案",
       [AUDIT_OPERATION_TYPES.CLOCK_UPDATE]: "更新档案",
+      [AUDIT_OPERATION_TYPES.CLOCK_DELETE]: "删除档案",
       [AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE]: "新增调校",
       [AUDIT_OPERATION_TYPES.RETEST_CREATE]: "新增复测",
       [AUDIT_OPERATION_TYPES.HANDOVER_CREATE]: "师傅交接",
@@ -3575,6 +3634,7 @@ async function handle(req, res) {
     const stats = {
       clockCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_CREATE).length,
       clockUpdate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_UPDATE).length,
+      clockDelete: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.CLOCK_DELETE).length,
       adjustmentCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.ADJUSTMENT_CREATE).length,
       retestCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.RETEST_CREATE).length,
       handoverCreate: logs.filter((l) => l.operationType === AUDIT_OPERATION_TYPES.HANDOVER_CREATE).length,
@@ -5102,7 +5162,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/backups") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.BACKUP_CREATE);
     const backup = await createBackup();
 
     createAuditLog(db, {
@@ -5121,7 +5181,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/backups") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.BACKUP_VIEW);
     const backups = await listBackups();
     return send(res, 200, {
       data: backups,
@@ -5132,14 +5192,14 @@ async function handle(req, res) {
 
   const validateBackupMatch = pathname.match(/^\/backups\/([^/]+)\/validate$/);
   if (validateBackupMatch && req.method === "GET") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.BACKUP_VALIDATE);
     const result = await validateBackup(validateBackupMatch[1]);
     return send(res, 200, { data: result });
   }
 
   const previewBackupMatch = pathname.match(/^\/backups\/([^/]+)\/preview$/);
   if (previewBackupMatch && req.method === "POST") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.BACKUP_PREVIEW);
     const backupId = previewBackupMatch[1];
     const result = await previewBackupDiff(backupId);
 
@@ -5170,7 +5230,7 @@ async function handle(req, res) {
 
   const restoreBackupMatch = pathname.match(/^\/backups\/([^/]+)\/restore$/);
   if (restoreBackupMatch && req.method === "POST") {
-    requireAdmin(req, db);
+    requirePermission(req, db, PERMISSIONS.BACKUP_RESTORE);
     const backupId = restoreBackupMatch[1];
     const body = await parseBody(req);
     const confirmationToken = body.confirmationToken || null;
